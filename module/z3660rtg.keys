@@ -4,7 +4,7 @@
 name=z3660rtg
 class=demand
 majors=c:49
-depend=monsw
+depend=monsw,zz9kbus
 unload=allowed
 desc=Z3660/ZZ9000 RTG framebuffer
 param=blit:bool:1

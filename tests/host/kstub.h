@@ -176,6 +176,55 @@ int h;
     ++kmonsw_lastcloses;
 }
 
+#ifdef ZZ9K_ZZ9KBUS
+/*
+ * zz9kbus: the registry as sys/zz9kbus.h describes it, one board at a time (the driver has
+ * one).  kbus_refuse makes the next register fail with that error; kbus_board is the board
+ * registered now, its zb_hold what zz9ksvc would hold.
+ */
+#include <sys/zz9kbus.h>
+static struct zz9kbus_board *kbus_board;
+static int kbus_refuse, kbus_registers, kbus_unregisters;
+
+static int
+zz9kbus_register(bp)
+struct zz9kbus_board *bp;
+{
+    int e;
+
+    ++kbus_registers;
+    if (!bp || bp->zb_version != ZZ9KBUS_VERSION || !bp->zb_bread || !bp->zb_doorbell ||
+        !bp->zb_heapphys)
+        return EINVAL;
+    if (bp == kbus_board)
+        return EBUSY;
+    if (kbus_board)
+        return ENOSPC;
+    if (kbus_refuse) {
+        e = kbus_refuse;
+        kbus_refuse = 0;
+        return e;
+    }
+    bp->zb_unit = 0;
+    bp->zb_hold = 0;
+    kbus_board = bp;
+    return 0;
+}
+
+static int
+zz9kbus_unregister(bp)
+struct zz9kbus_board *bp;
+{
+    ++kbus_unregisters;
+    if (!bp || bp != kbus_board)
+        return EINVAL;
+    if (bp->zb_hold)
+        return EBUSY;
+    kbus_board = 0;
+    return 0;
+}
+#endif
+
 /* autocon: a table the test sets */
 struct kboard {
     unsigned long pc;
@@ -237,6 +286,7 @@ kprintf(const char *fmt, ...)
 #define PG_V        0x00000001
 #endif
 static unsigned long kmap_limit = 0xffffffffUL;
+static unsigned long kmap_faillen;      /* a map of exactly this length fails */
 static int kmap_calls, kunmap_calls, kmap_regsfail, kmap_lastcm, kmap_lastflags;
 static unsigned long kmapped;           /* bytes mapped now */
 
@@ -244,7 +294,7 @@ static char *
 kmap_phys(phys, len)
 unsigned long phys, len;
 {
-    if (phys < KPHYS || len > kmap_limit)
+    if (phys < KPHYS || len > kmap_limit || (kmap_faillen && len == kmap_faillen))
         return (char *)0;
     if (len <= 0x2000 && kmap_regsfail)
         return (char *)0;

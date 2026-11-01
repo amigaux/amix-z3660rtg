@@ -403,6 +403,22 @@ struct zz9k_conputs {
 #define ZZ9K_Z3660_REG_FW_BETA     0x280
 #define ZZ9K_Z3660_REG_FW_ALFA     0x284
 
+/*
+ * The core-1 services runtime of our firmware (Z3660 fork, docs/core1-runtime.md): the
+ * ZZ9000 SDK's bootstrap block, moved from 0x100 to 0x400, 32-bit words 0x400-0x41F, all
+ * ones when the runtime is absent (an emulated boot mode, a firmware without it).  Its
+ * addresses are ARM addresses in the RTG window, board offset = address - 0x18000000.
+ * The mailbox (descriptor and rings) lies in a 64 KB slot at board 0x7B00000, the
+ * host-visible heap above it to 0x7BFFFFF.  The module form registers the block with
+ * zz9kbus (ZZ9K_ZZ9KBUS); GETREG/SETREG never reach it.
+ */
+#define ZZ9K_Z3660_SVC_BOFF     0x400
+#define ZZ9K_Z3660_SVC_BSIZE    0x20
+#define ZZ9K_Z3660_SVC_ARMBASE  0x18000000UL
+#define ZZ9K_Z3660_SVC_MBOX     0x07b00000UL
+#define ZZ9K_Z3660_SVC_HEAP     0x07b10000UL
+#define ZZ9K_Z3660_SVC_END      0x07c00000UL
+
 /* Z3660 row console geometry: 1920x1080 (id 5) unless a build asks for 1280x800 (id 17) */
 #ifdef ZZ9K_Z3660_CON_1280x800
 #define ZZ9K_Z3660_CON_W        1280
@@ -489,6 +505,31 @@ struct zz9k_sensreg {
     unsigned short max;
 };
 
+/*
+ * The SDK bootstrap block of a board whose firmware can run the core-1 services runtime
+ * (ZZ9000 SDK v2), for the zz9kbus registration (ZZ9K_ZZ9KBUS).  boff and bsize are
+ * register-page offsets; the other offsets are board offsets.  The block's layout is the
+ * SDK's: magic and ABI version at +0/+2, the mailbox's ARM address at +4/+6, status and
+ * doorbell at +8.
+ */
+#define ZZ9K_SVC_MAGIC          0x5a39
+#define ZZ9K_SVC_R_MAGIC        0x0
+#define ZZ9K_SVC_R_ABI          0x2
+#define ZZ9K_SVC_R_MBOX_HI      0x4
+#define ZZ9K_SVC_R_MBOX_LO      0x6
+#define ZZ9K_SVC_R_DOORBELL     0x8
+
+struct zz9k_svcwin {
+    unsigned long id;             /* zz9kbus board id: manufacturer << 16 | product */
+    unsigned short boff;          /* the bootstrap block in the register page */
+    unsigned short bsize;         /* its bytes */
+    unsigned long armbase;        /* the ARM address of board offset 0 */
+    unsigned long mbox_lo;        /* the mailbox's slot, [mbox_lo, mbox_hi) */
+    unsigned long mbox_hi;
+    unsigned long heap_lo;        /* the host-visible heap, [heap_lo, heap_hi) */
+    unsigned long heap_hi;
+};
+
 struct zz9k_boardtab {
     char *name;                   /* as printed by the driver */
     char *advice;                 /* printed after a ZZ9K_BT_REJECT match */
@@ -512,6 +553,9 @@ struct zz9k_boardtab {
     unsigned short flags;         /* ZZ9K_BT_* */
     struct zz9k_regwin *regwin;   /* what GETREG/SETREG may reach */
     struct zz9k_sensreg *sens;    /* [ZZ9K_SENS_N] for ZZ9KIOC_SENSORS; 0 = none */
+#ifdef ZZ9K_ZZ9KBUS
+    struct zz9k_svcwin *svc;      /* the SDK bootstrap block; 0 = none */
+#endif
 };
 
 #endif /* ZZ9000_H */

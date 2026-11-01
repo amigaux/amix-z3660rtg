@@ -248,6 +248,9 @@ t_allowlist()
             if (off < 0x318 || off >= 0x31c)
                 bad += regop(ZZ9KIOC_SETREG, off, 0) != EINVAL;
     EQ(bad, 0, "nothing from 0x1B0 is writable");
+    for (off = 0x400, bad = 0; off < 0x420; off += 2)
+        bad += regop(ZZ9KIOC_SETREG, off, 0) != EINVAL || regop(ZZ9KIOC_GETREG, off, 0) != EINVAL;
+    EQ(bad, 0, "the core-1 bootstrap block 0x400-0x41F refused for GETREG and SETREG");
     EQ(regop(ZZ9KIOC_SETREG, 0x1000, 0), EINVAL, "beyond the page");
     EQ(regop(ZZ9KIOC_SETREG, 0x121, 0), EINVAL, "odd offset");
     EQ(regop(ZZ9KIOC_SETREG, 0x13c, 0), EINVAL, "FILLTEMPLATE");
@@ -950,6 +953,197 @@ t_sensors()
     EQ(kmonsw_lastcloses, lc, "its close does not touch the monitor switch");
 }
 
+#ifdef ZZ9K_ZZ9KBUS
+/*
+ * The zz9kbus registration.  The bootstrap block is plain memory at 0x400; the mailbox's
+ * slot and the heap are the window's memory at +0x7B00000 (the same host memory whether
+ * the board is identity-mapped or mapped above it).
+ */
+#define SVC_MBOX_ARM    (ZZ9K_Z3660_SVC_ARMBASE + ZZ9K_Z3660_SVC_MBOX)
+#define SVC_HEAP_ARM    (ZZ9K_Z3660_SVC_ARMBASE + ZZ9K_Z3660_SVC_HEAP)
+#define SVC_END_ARM     (ZZ9K_Z3660_SVC_ARMBASE + ZZ9K_Z3660_SVC_END)
+
+static void
+svc_block(magic, mbox)
+unsigned int magic, mbox;
+{
+    int i;
+
+    for (i = 0; i < 8; ++i)
+        *reg32(0x400 + 4 * i) = 0;
+    *reg32(0x400) = magic;
+    *reg32(0x404) = mbox;
+}
+
+/* unload and load the module again, as the core would; the load's log alone in klog */
+static int
+svc_reload()
+{
+    int e;
+
+    e = zz9000_unload();
+    if (e)
+        return e;
+    klogn = 0;
+    klog[0] = 0;
+    return zz9000_load((char *)0);
+}
+
+static void
+t_svc()
+{
+    struct zz9k_board *bp = &zz9k_boards[0];
+    struct zz9kbus_board *zb;
+    unsigned long phys;
+    unsigned int mapped0, r0;
+    int i, bad;
+
+    /* absent: no magic, all ones (a firmware without the runtime, an emulated mode) */
+    CHECK(kbus_board == 0 && kbus_registers == 0, "loaded without the magic: not registered");
+    svc_block(0xffffffffU, 0xffffffffU);
+    r0 = kbus_registers;
+    EQ(svc_reload(), 0, "reload, block all ones");
+    CHECK(bp->base != 0, "the display attached");
+    CHECK(kbus_board == 0 && kbus_registers == r0, "all ones: not registered, not tried");
+    CHECK(strstr(klog, "core-1") == 0 && strstr(klog, "zz9kbus") == 0,
+        "and nothing said about it");
+    svc_block(0x5a380200U, SVC_MBOX_ARM);
+    EQ(svc_reload(), 0, "reload, a wrong magic");
+    CHECK(kbus_board == 0, "a wrong magic: not registered");
+
+    /* present */
+    mapped0 = kmapped;
+    svc_block(0x5a390200U, SVC_MBOX_ARM);
+    *reg32(0x41c) = 0x1234abcdU;
+    EQ(svc_reload(), 0, "reload, the runtime present");
+    zb = kbus_board;
+    CHECK(zb == &zz9k_bus[0], "registered: the driver's own record");
+    if (!zb)
+        return;
+    EQ(zb->zb_version, ZZ9KBUS_VERSION, "zb_version");
+    EQ(zb->zb_unit, 0, "zb_unit from zz9kbus");
+    EQ(zb->zb_id, ZZ9KBUS_ID_Z3660, "zb_id: the Z3660");
+    EQ(zb->zb_boff, 0x400, "zb_boff 0x400");
+    EQ(zb->zb_bsize, 0x20, "zb_bsize: the block's 32 bytes");
+    CHECK(zb->zb_ctx == (char *)bp, "zb_ctx: the board");
+    CHECK(zb->zb_mbox == (char *)(WIN + ZZ9K_Z3660_SVC_MBOX), "zb_mbox: the slot, as the kernel reaches it");
+    EQ(zb->zb_mboxlen, 0x10000, "zb_mboxlen: the 64 KB slot");
+    zb->zb_mbox[0] = 0x5a;
+    EQ(*(volatile unsigned char *)(WIN + ZZ9K_Z3660_SVC_MBOX), 0x5a, "the mailbox is the board's memory");
+    CHECK(strstr(klog, "core-1 runtime ABI 2.0") != 0, "the attach says so");
+#ifdef ZZ9K_HOST_MAPPED
+    EQ(kmapped - mapped0, 0x10000, "the slot mapped, 64 KB");
+#ifdef ZZ9K_DEV_KVMAP
+    EQ(kmap_lastcm, 0x40, "noncacheable, serialised");
+#endif
+#else
+    EQ(kmapped, mapped0, "identity-mapped: nothing mapped");
+#endif
+
+    /* the read: the block only, even offsets, 16-bit halves of its words */
+    EQ((*zb->zb_bread)(zb->zb_ctx, 0), 0x5a39, "bread 0: the magic");
+    EQ((*zb->zb_bread)(zb->zb_ctx, 2), 0x0200, "bread 2: ABI 2.0");
+    EQ((*zb->zb_bread)(zb->zb_ctx, 4), SVC_MBOX_ARM >> 16, "bread 4: mailbox high");
+    EQ((*zb->zb_bread)(zb->zb_ctx, 6), SVC_MBOX_ARM & 0xffff, "bread 6: mailbox low");
+    EQ((*zb->zb_bread)(zb->zb_ctx, 0x1c), 0x1234, "bread 0x1c");
+    EQ((*zb->zb_bread)(zb->zb_ctx, 0x1e), 0xabcd, "bread 0x1e: the block's last half-word");
+    *reg32(0x420) = 0x11112222U;
+    *reg32(0x3fc) = 0x33334444U;
+    EQ((*zb->zb_bread)(zb->zb_ctx, 0x20), 0xffff, "bread 0x20: past the block");
+    EQ((*zb->zb_bread)(zb->zb_ctx, 1), 0xffff, "bread of an odd offset");
+    EQ((*zb->zb_bread)(zb->zb_ctx, 0xfffffffeU), 0xffff, "bread of a negative offset");
+    EQ((*zb->zb_bread)(zb->zb_ctx, 0x2000), 0xffff, "bread far past the block");
+
+    /* the doorbell: one word write at 0x408, nothing else */
+    *reg32(0x408) = 0xdeadbeefU;
+    *reg32(0x40c) = 0x0badf00dU;
+    (*zb->zb_doorbell)(zb->zb_ctx);
+    EQ(*reg32(0x408), 0, "the doorbell written");
+    EQ(*reg32(0x40c), 0x0badf00dU, "and only it");
+    EQ(*reg32(0x404), SVC_MBOX_ARM, "the mailbox address untouched");
+
+    /* the heap window */
+    phys = 0;
+    EQ((*zb->zb_heapphys)(zb->zb_ctx, SVC_HEAP_ARM, 0x1000, &phys), 0, "the heap's first page");
+    EQ(phys, bp->phys + ZZ9K_Z3660_SVC_HEAP, "its physical address");
+    EQ((*zb->zb_heapphys)(zb->zb_ctx, SVC_HEAP_ARM, ZZ9K_Z3660_SVC_END - ZZ9K_Z3660_SVC_HEAP,
+        &phys), 0, "the whole heap");
+    EQ((*zb->zb_heapphys)(zb->zb_ctx, SVC_END_ARM - 0x1000, 0x1000, &phys), 0, "its last page");
+    EQ(phys, bp->phys + ZZ9K_Z3660_SVC_END - 0x1000, "at the end of the window");
+    bad = 0;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, SVC_END_ARM - 0x1000, 0x1001, &phys) != -1;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, SVC_END_ARM, 1, &phys) != -1;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, SVC_HEAP_ARM - 1, 2, &phys) != -1;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, SVC_MBOX_ARM, 0x1000, &phys) != -1;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, SVC_HEAP_ARM, 0, &phys) != -1;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, SVC_HEAP_ARM + 0x1000, 0xffffffffU, &phys) != -1;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, 0xffffffffU, 1, &phys) != -1;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, ZZ9K_Z3660_SVC_HEAP, 0x1000, &phys) != -1;
+    bad += (*zb->zb_heapphys)(zb->zb_ctx, SVC_HEAP_ARM, 0x1000, (unsigned long *)0) != -1;
+    EQ(bad, 0, "outside the heap, an empty range, a wrapping length, a board offset: -1");
+
+    /* the allow-list still refuses the block from user space */
+    for (i = 0x400, bad = 0; i < 0x420; i += 2)
+        bad += regop(ZZ9KIOC_GETREG, i, 0) != EINVAL || regop(ZZ9KIOC_SETREG, i, 0) != EINVAL;
+    EQ(bad, 0, "GETREG and SETREG of the block refused while registered");
+
+    /* unload: refused while zz9ksvc holds the board, then unregistered */
+    zb->zb_hold = 1;
+    EQ(zz9000_unload(), EBUSY, "unload refused while held");
+    CHECK(kbus_board == zb && bp->base != 0, "still registered, the board kept");
+    zb->zb_hold = 0;
+    EQ(zz9000_unload(), 0, "unload after the put");
+    CHECK(kbus_board == 0, "unregistered");
+#ifdef ZZ9K_HOST_MAPPED
+    EQ(kmapped, 0, "the slot released, with the board's own maps");
+#else
+    EQ(kmapped, mapped0, "nothing was mapped");
+#endif
+    EQ(zz9000_unload(), 0, "a second unload is no error");
+    EQ(zz9000_load((char *)0), 0, "load again");
+    CHECK(kbus_board == &zz9k_bus[0], "registered again");
+
+    /* a mailbox outside its slot, a refusing zz9kbus, a slot that cannot be mapped */
+    svc_block(0x5a390200U, SVC_HEAP_ARM);
+    EQ(svc_reload(), 0, "reload, the mailbox in the heap");
+    CHECK(kbus_board == 0 && strstr(klog, "outside its slot") != 0, "refused: not registered");
+    svc_block(0x5a390200U, SVC_MBOX_ARM + 2);
+    EQ(svc_reload(), 0, "reload, a misaligned mailbox");
+    CHECK(kbus_board == 0, "refused");
+    svc_block(0x5a390200U, ZZ9K_Z3660_SVC_MBOX);
+    EQ(svc_reload(), 0, "reload, a board offset for an ARM address");
+    CHECK(kbus_board == 0, "refused");
+    svc_block(0x5a390200U, SVC_MBOX_ARM + 0x40);
+    EQ(svc_reload(), 0, "reload, the mailbox inside its slot");
+    CHECK(kbus_board != 0 && kbus_board->zb_mbox == (char *)(WIN + ZZ9K_Z3660_SVC_MBOX + 0x40) &&
+        kbus_board->zb_mboxlen == 0x10000 - 0x40, "from its address to the slot's end");
+    kbus_refuse = ENOSPC;
+    mapped0 = kmapped;
+    EQ(svc_reload(), 0, "reload, zz9kbus full");
+    CHECK(kbus_board == 0 && strstr(klog, "zz9kbus refused") != 0, "the display alone");
+    EQ(kmapped, mapped0 -
+#ifdef ZZ9K_HOST_MAPPED
+        0x10000,
+#else
+        0,
+#endif
+        "the slot released again");
+#ifdef ZZ9K_HOST_MAPPED
+    kmap_faillen = 0x10000;
+    svc_block(0x5a390200U, SVC_MBOX_ARM);
+    EQ(svc_reload(), 0, "reload, no room for the slot");
+    CHECK(kbus_board == 0 && strstr(klog, "cannot map the core-1") != 0, "the display alone");
+    CHECK(bp->base != 0, "attached");
+    kmap_faillen = 0;
+#endif
+
+    /* back as the other tests found it: no runtime */
+    svc_block(0, 0);
+    EQ(svc_reload(), 0, "reload without the runtime");
+    CHECK(kbus_board == 0, "not registered");
+}
+#endif
+
 static void
 t_layout()
 {
@@ -1054,6 +1248,9 @@ char **argv;
     t_layout();
     t_getmodes();
     t_sensors();
+#ifdef ZZ9K_ZZ9KBUS
+    t_svc();
+#endif
     t_fixed();
     printf("%s: %d passed, %d failed\n", ZZ9K_HOST_CONFIG, npass, nfail);
     return nfail != 0;

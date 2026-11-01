@@ -12,6 +12,9 @@
 #             amix's kernel/modules/monsw build for the kit's line (`make -C monsw/module`
 #             there); the checker refuses monsw_* without it.  <sys/monsw.h> comes from
 #             the kit (MONSW_REV in kit.conf)
+#   ZZ9KBUSMOD  the zz9kbus module, also in depend= (zz9kbus_register, zz9kbus_unregister),
+#             by default amix's kernel/modules/zz9kbus build for the kit's line (`make -C
+#             zz9kbus/module` there); <sys/zz9kbus.h> comes from the kit
 #   LOCALIZE_OBJCOPY  an objcopy newer than binutils 2.8.1 (gcc14-cross-amix's)
 # Master is generated from z3660rtg.keys; it has no $cpu, so the kit gives each line its
 # own (68030, 68040).
@@ -24,14 +27,15 @@ endif
 
 SRC      = ../overlay/usr/sys/amiga/driver/zz9000
 MONSWMOD ?= ../../amix/kernel/modules/monsw/build/$(LINE)/mod.d/monsw
+ZZ9KBUSMOD ?= ../../amix/kernel/modules/zz9kbus/build/$(LINE)/mod.d/zz9kbus
 MODULE   = z3660rtg
 OBJS     = zz9000.o
-DEPS     = $(MONSWMOD)
+DEPS     = $(MONSWMOD) $(ZZ9KBUSMOD)
 EXTRA    = $(KIT)/stock/usr/sys/amiga/console/sunfont.o
 LOCALIZE = builtinfont
 # a board above the identity map is mapped: dev_kvmap on k46 (cache class set), sptalloc
 # on k30 (zz9000.c, zz9k_attach_mapped)
-CFLAGS   = -DZZ9K_MODULE -DZZ9K_TARGET_Z3660 -DZZ9K_MONSW $(ZZ9K_OPTS) \
+CFLAGS   = -DZZ9K_MODULE -DZZ9K_TARGET_Z3660 -DZZ9K_MONSW -DZZ9K_ZZ9KBUS $(ZZ9K_OPTS) \
 	   $(if $(filter k46,$(LINE)),-DZZ9K_DEV_KVMAP,-DZZ9K_SPT_MAP)
 
 include $(KIT)/mk/module.mk

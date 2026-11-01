@@ -48,6 +48,9 @@
 #ifndef ZZ9K_MONSW
 #error "the module depends on the monsw module (depend=monsw): build it with -DZZ9K_MONSW"
 #endif
+#ifndef ZZ9K_ZZ9KBUS
+#error "the module depends on the zz9kbus module (depend=zz9kbus): build it with -DZZ9K_ZZ9KBUS"
+#endif
 #endif
 
 #define ZZ9K_MAXBOARDS 1
@@ -217,6 +220,21 @@ extern int hat_cm_fb_add();
 #define ZZ9K_MONSW_SET(rtg)   monsw_set(rtg)
 #else
 #define ZZ9K_MONSW_SET(rtg)
+#endif
+
+/*
+ * The core-1 service channel.  A board whose row describes an SDK bootstrap block (struct
+ * zz9k_svcwin) and whose block answers the SDK magic is registered with the zz9kbus module
+ * (sys/zz9kbus.h) at load and unregistered at unload; zz9ksvc, a separate module, serves
+ * /dev/zz9ksvcN through it.  zz9kbus gets a 16-bit read of the bootstrap block, the doorbell
+ * write, the mailbox's slot mapped for the kernel and the host-visible heap window: nothing
+ * else of the board.  Without the magic nothing is registered and the driver is the display
+ * alone.  Built with -DZZ9K_ZZ9KBUS, i.e. only for the module form.
+ */
+#ifdef ZZ9K_ZZ9KBUS
+#include <sys/zz9kbus.h>
+static void zz9k_svc_attach();
+static int zz9k_svc_detach();
 #endif
 static void zz9k_blit_fill();
 static void zz9k_blit_copy();
@@ -421,6 +439,17 @@ static struct zz9k_regwin zz9k_regwin_z3660[] = {
     { 0, 0, 0 }
 };
 
+#ifdef ZZ9K_ZZ9KBUS
+/* The Z3660's bootstrap block, mailbox slot and heap (zz9000.h ZZ9K_Z3660_SVC_*). */
+static struct zz9k_svcwin zz9k_svc_z3660 = {
+    ZZ9K_Z3660_PRODUCT_PC, ZZ9K_Z3660_SVC_BOFF, ZZ9K_Z3660_SVC_BSIZE, ZZ9K_Z3660_SVC_ARMBASE,
+    ZZ9K_Z3660_SVC_MBOX, ZZ9K_Z3660_SVC_HEAP, ZZ9K_Z3660_SVC_HEAP, ZZ9K_Z3660_SVC_END
+};
+#define ZZ9K_ROW_SVC_Z3660  , &zz9k_svc_z3660
+#else
+#define ZZ9K_ROW_SVC_Z3660
+#endif
+
 /* The Z3660's measurements for ZZ9KIOC_SENSORS, in the order of the ZZ9K_SENS_* ids. */
 static struct zz9k_sensreg zz9k_sens_z3660[ZZ9K_SENS_N] = {
     { ZZ9K_Z3660_REG_TEMPERATURE, 10, 2000 },   /* C x 10 -> x 100 */
@@ -536,7 +565,7 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
       ZZ9K_Z3660_CON_W, ZZ9K_Z3660_CON_H,
       ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, 1,
       ZZ9K_BT_NOCAPTURE | ZZ9K_BT_BLIT_Z3660, zz9k_regwin_z3660,
-      zz9k_sens_z3660 }
+      zz9k_sens_z3660 ZZ9K_ROW_SVC_Z3660 }
     /*
      * The same board reached by its fixed base, for a machine whose
      * AutoConfig table does not list it.  Device space is the framebuffer
@@ -552,7 +581,7 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
       ZZ9K_Z3660_CON_W, ZZ9K_Z3660_CON_H,
       ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, 1,
       ZZ9K_BT_AGAGATE | ZZ9K_BT_NOCAPTURE | ZZ9K_BT_BLIT_Z3660,
-      zz9k_regwin_z3660, zz9k_sens_z3660 }
+      zz9k_regwin_z3660, zz9k_sens_z3660 ZZ9K_ROW_SVC_Z3660 }
 #endif /* ZZ9K_TARGET_Z3660 */
 };
 
@@ -1449,6 +1478,180 @@ struct zz9k_board *bp;
     }
 #endif
 }
+
+#ifdef ZZ9K_ZZ9KBUS
+/*
+ * The zz9kbus registration.  The board record is ours; zz9kbus and zz9ksvc reach the board
+ * only through these three functions, which take the record's zb_ctx (the board) and touch
+ * nothing but the bootstrap block.  None sleeps; the doorbell may run from a callout.
+ */
+static struct zz9kbus_board zz9k_bus[ZZ9K_MAXBOARDS];
+static char zz9k_busin[ZZ9K_MAXBOARDS];        /* registered with zz9kbus */
+static char *zz9k_kmbox[ZZ9K_MAXBOARDS];       /* the mailbox slot, when mapped for it */
+static unsigned long zz9k_kmboxlen[ZZ9K_MAXBOARDS];
+
+/* the 16-bit register at off in the bootstrap block, or 0xffff */
+static unsigned
+zz9k_svc_bread(ctx, off)
+char *ctx;
+unsigned long off;
+{
+    struct zz9k_board *bp = (struct zz9k_board *)ctx;
+    struct zz9k_svcwin *sw;
+    unsigned long v;
+    char *r;
+
+    if (!bp || !bp->base || !bp->bt || !(sw = bp->bt->svc) || (off & 1) || off >= sw->bsize)
+        return 0xffff;
+    r = (char *)bp->base + sw->boff;
+    if (bp->bt->regw == 4) {                    /* aligned words: the half of one */
+        v = *((volatile unsigned long *)(r + (off & ~(unsigned long)3)));
+        return (unsigned)((off & 2) ? (v & 0xffff) : (v >> 16));
+    }
+    return (unsigned)ZZ9K_REG(r, off);
+}
+
+static void
+zz9k_svc_doorbell(ctx)
+char *ctx;
+{
+    struct zz9k_board *bp = (struct zz9k_board *)ctx;
+    struct zz9k_svcwin *sw;
+    char *r;
+
+    if (!bp || !bp->base || !bp->bt || !(sw = bp->bt->svc))
+        return;
+    r = (char *)bp->base + sw->boff + ZZ9K_SVC_R_DOORBELL;
+    if (bp->bt->regw == 4)
+        *((volatile unsigned long *)r) = 0;
+    else
+        ZZ9K_REG(r, 0) = 0;
+}
+
+/* 0 and *physp when [armaddr, armaddr + len) lies in the host-visible heap, else -1 */
+static int
+zz9k_svc_heapphys(ctx, armaddr, len, physp)
+char *ctx;
+unsigned long armaddr;
+unsigned long len;
+unsigned long *physp;
+{
+    struct zz9k_board *bp = (struct zz9k_board *)ctx;
+    struct zz9k_svcwin *sw;
+    unsigned long off;
+
+    if (!bp || !bp->base || !bp->bt || !(sw = bp->bt->svc) || !physp || len == 0)
+        return -1;
+    if (armaddr < sw->armbase)
+        return -1;
+    off = armaddr - sw->armbase;
+    if (off < sw->heap_lo || off >= sw->heap_hi || len > sw->heap_hi - off)
+        return -1;
+    *physp = (unsigned long)bp->phys + off;
+    return 0;
+}
+
+static void
+zz9k_svc_unmap(unit)
+int unit;
+{
+#ifdef ZZ9K_CAN_MAP
+    zz9k_unmap(zz9k_kmbox[unit], zz9k_kmboxlen[unit]);
+#endif
+    zz9k_kmbox[unit] = (char *)0;
+    zz9k_kmboxlen[unit] = 0;
+}
+
+/*
+ * At load, after the probe: register the board when its bootstrap block answers the magic
+ * and publishes a mailbox inside its slot.  The slot is reached as the window is: through
+ * the identity map, or mapped (noncacheable, serialised) when the window lies above it.
+ * Any miss leaves the display alone, as without zz9kbus.
+ */
+static void
+zz9k_svc_attach(bp)
+struct zz9k_board *bp;
+{
+    struct zz9k_svcwin *sw;
+    struct zz9kbus_board *zb;
+    unsigned long arm, off;
+    unsigned abi;
+    char *slot;
+    int unit, e;
+
+    unit = bp - zz9k_boards;
+    if (!bp->base || !bp->bt || !(sw = bp->bt->svc) || zz9k_busin[unit])
+        return;
+    if ((unsigned long)sw->boff + sw->bsize > bp->bt->reg_size)
+        return;
+    if (zz9k_svc_bread((char *)bp, (unsigned long)ZZ9K_SVC_R_MAGIC) != ZZ9K_SVC_MAGIC)
+        return;                                 /* no runtime: nothing to say */
+    abi = zz9k_svc_bread((char *)bp, (unsigned long)ZZ9K_SVC_R_ABI);
+    arm = (unsigned long)zz9k_svc_bread((char *)bp, (unsigned long)ZZ9K_SVC_R_MBOX_HI) << 16 |
+          zz9k_svc_bread((char *)bp, (unsigned long)ZZ9K_SVC_R_MBOX_LO);
+    off = arm - sw->armbase;
+    if (arm < sw->armbase || off < sw->mbox_lo || off >= sw->mbox_hi || (off & 3)) {
+        printf("zz9000: core-1 runtime mailbox 0x%x outside its slot: no service channel\n",
+            (unsigned int)arm);
+        return;
+    }
+    if (bp->mapped) {
+#ifdef ZZ9K_CAN_MAP
+        slot = zz9k_map((unsigned long)bp->phys + sw->mbox_lo, sw->mbox_hi - sw->mbox_lo,
+            ZZ9K_CM_NCS);
+        if (!slot) {
+            printf("zz9000: cannot map the core-1 runtime mailbox: no service channel\n");
+            return;
+        }
+        zz9k_kmbox[unit] = slot;
+        zz9k_kmboxlen[unit] = sw->mbox_hi - sw->mbox_lo;
+#else
+        return;
+#endif
+    } else
+        slot = (char *)bp->phys + sw->mbox_lo;
+
+    zb = &zz9k_bus[unit];
+    bzero((char *)zb, sizeof *zb);
+    zb->zb_version = ZZ9KBUS_VERSION;
+    zb->zb_id = sw->id;
+    zb->zb_boff = sw->boff;
+    zb->zb_bsize = sw->bsize;
+    zb->zb_ctx = (char *)bp;
+    zb->zb_bread = zz9k_svc_bread;
+    zb->zb_doorbell = zz9k_svc_doorbell;
+    zb->zb_mbox = slot + (off - sw->mbox_lo);
+    zb->zb_mboxlen = sw->mbox_hi - off;
+    zb->zb_heapphys = zz9k_svc_heapphys;
+    e = zz9kbus_register(zb);
+    if (e) {
+        printf("zz9000: zz9kbus refused the board (%d): no service channel\n", e);
+        zz9k_svc_unmap(unit);
+        return;
+    }
+    zz9k_busin[unit] = 1;
+    printf("zz9000: core-1 runtime ABI %d.%d, mailbox 0x%x: service unit %d\n",
+        (int)(abi >> 8), (int)(abi & 0xff), (unsigned int)arm, zb->zb_unit);
+}
+
+/* At unload: 0 when the board is not (or no longer) registered, EBUSY while zz9ksvc holds it. */
+static int
+zz9k_svc_detach(bp)
+struct zz9k_board *bp;
+{
+    int unit, e;
+
+    unit = bp - zz9k_boards;
+    if (!zz9k_busin[unit])
+        return 0;
+    e = zz9kbus_unregister(&zz9k_bus[unit]);
+    if (e)
+        return e;
+    zz9k_busin[unit] = 0;
+    zz9k_svc_unmap(unit);
+    return 0;
+}
+#endif /* ZZ9K_ZZ9KBUS */
 
 static unsigned char
 zz9k_glyph(c, row)
@@ -3146,22 +3349,30 @@ zz9000_load(params)
 char *params;
 {
     zz9k_params(params);
-    return zz9k_probe(0) ? 0 : ENXIO;
+    if (!zz9k_probe(0))
+        return ENXIO;
+    zz9k_svc_attach(&zz9k_boards[0]);
+    return 0;
 }
 
 /*
- * Called only while /dev/zz9000 is closed.  Undoes the console hook (and with it the switch
- * back to native, as ZZ9KIOC_CONSOLE DISABLE does) and the monsw registration, which keeps a
- * pointer to this module's board name.
+ * Called only while /dev/zz9000 is closed.  Refused (EBUSY) while zz9ksvc holds the board
+ * through zz9kbus, before anything is undone.  Otherwise undoes the zz9kbus registration,
+ * the console hook (and with it the switch back to native, as ZZ9KIOC_CONSOLE DISABLE does)
+ * and the monsw registration, which keeps a pointer to this module's board name.
  */
 static int
 zz9000_unload()
 {
     struct zz9k_board *bp;
+    int e;
 
+    bp = &zz9k_boards[0];
+    e = zz9k_svc_detach(bp);
+    if (e)
+        return e;
     if (zz9k_console_redirect)
         zz9k_console_disable();
-    bp = &zz9k_boards[0];
     if (bp->base && bp->monsw_handle >= 0) {
         monsw_unregister(bp->monsw_handle);
         bp->monsw_handle = -1;

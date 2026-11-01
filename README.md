@@ -31,15 +31,23 @@ left unchanged.
   options).
 - **Module.** `module/Makefile` builds the same source as a loadable module with an
   ABI kit from [amix](https://github.com/amigaux/amix)'s `kernel/dlm` (`make KIT=<kit>/k30` or
-  `k46`). The module depends on monsw, built in amix's `kernel/modules/monsw`; the default
-  paths (`MONSWMOD`, the `KIT` examples) assume amix checked out beside this repository. The
-  package version is `module/VERSION`. It is compiled with `-DZZ9K_MODULE -DZZ9K_TARGET_Z3660
-  -DZZ9K_MONSW`. The static 68040/68060 build also passes `-DZZ9K_NO_BUILTINFONT`, because those
+  `k46`). The module depends on monsw and zz9kbus, built in amix's `kernel/modules/monsw` and
+  `kernel/modules/zz9kbus`; the default paths (`MONSWMOD`, `ZZ9KBUSMOD`, the `KIT` examples)
+  assume amix checked out beside this repository. The package version is `module/VERSION`.
+  It is compiled with `-DZZ9K_MODULE -DZZ9K_TARGET_Z3660 -DZZ9K_MONSW -DZZ9K_ZZ9KBUS`. The static 68040/68060 build also passes `-DZZ9K_NO_BUILTINFONT`, because those
   kernels have no `builtinfont` symbol and the static link adds no font, so its console falls
   back to the driver's 5x7 glyphs. The module leaves that flag out on purpose: it links the
   kit's stock `sunfont.o` and makes `builtinfont` local (`EXTRA`, `LOCALIZE`), so it carries its
   own console font and needs no kernel symbol on either line. With the flag, the module would
   ignore the font it links and use the 5x7 glyphs.
+- **Service channel.** When the Z3660 firmware runs the core-1 services runtime, its SDK
+  bootstrap block at register 0x400 answers the magic 0x5A39. The module then registers the
+  board with zz9kbus (amix's `kernel/modules/include/sys/zz9kbus.h`): a 16-bit read of the
+  block 0x400-0x41F, the doorbell write at 0x408, the mailbox's 64 KB slot at board 0x7B00000
+  (mapped for the kernel when the board lies above the identity map) and the host-visible heap
+  window 0x7B10000-0x7BFFFFF. amix's zz9ksvc module serves `/dev/zz9ksvcN` through it. Without
+  the magic nothing is registered and the module is the display alone. Its unload is refused
+  (`EBUSY`) while zz9ksvc holds the board. GETREG and SETREG never reach the block.
 - **Module parameters** (`module/z3660rtg.keys`): `blit` (1: use the card's blitter),
   `maxarea` (pixels per blitter band, default 8192) and `fixed` (0: find the board only
   through its AutoConfig entry, as a real Z3660 is found; 1 also tries the fixed base at
