@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-12 — the module registers the board with zz9kbus (c3a8287)
+
+When the firmware's core-1 services runtime answers the SDK magic 0x5A39 at register 0x400, the module registers the
+board with amix's zz9kbus module: a 16-bit read of the bootstrap block, the doorbell write, the mailbox slot and the
+heap window. Unload is refused (EBUSY) while zz9ksvc holds the board. depend=monsw,zz9kbus; the static builds are
+unchanged. Without the magic nothing is registered. Host tests cover it with a stub zz9kbus.
+
 ## 2026-11-01 — the review fixes, the sensors ioctl with ztop and xztop, a board above the identity map; module 1.1.1-1 (643a555..5c433fe)
 
 Commands that change the board need a descriptor open for writing; raw register access, CONSOLE, PROBE and SETSWITCH
