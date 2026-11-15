@@ -238,3 +238,18 @@ keeps it on `/dev/zz9000` when a ZZ9000 card is added; the card is `/dev/zz9001`
 board, unit 1 answers `ENXIO`. The kernel framebuffer console runs on one board at a time,
 the one whose `ZZ9KIOC_CONSOLE` enabled it. `mkdev.sh` makes the unit 1 nodes; a package
 that ships the nodes needs them too.
+
+## Which board is behind the node
+
+`GETINFO`'s `zorro` and `product` together name the board, unchanged in layout (32 bytes):
+
+| `zorro` | `product` | board | `zz9000.h` test |
+|---|---|---|---|
+| 3 | 1 | the Z3660 accelerator's onboard RTG | `ZZ9K_IS_Z3660(&info)` |
+| 2 | 3 | an MNT ZZ9000 card, Zorro II | `ZZ9K_IS_ZZ9000_Z2(&info)` |
+| 3 | 4 | an MNT ZZ9000 card, Zorro III | `ZZ9K_IS_ZZ9000_Z3(&info)` |
+
+No two boards share a pair (the host tests check every row). The information node answers
+`GETINFO` for anyone, so a display start-up script can ask `/dev/zz9000i` without
+privilege; `zz9k_mode` with no mode prints the pair too. Only a ZZ9000 has the capture
+path.

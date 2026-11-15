@@ -537,7 +537,7 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
       ZZ9K_Z3660_REG_SIZE,
       4, zz9k_regoff_z3660, zz9k_modes_z3660,
       ZZ9K_Z3660_CON_W, ZZ9K_Z3660_CON_H,
-      ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, 1,
+      ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, ZZ9K_PRODUCT_Z3660,
       ZZ9K_BT_NOCAPTURE | ZZ9K_BT_BLIT_Z3660 | ZZ9K_BT_UNIQUE, zz9k_regwin_z3660,
       zz9k_sens_z3660 },
     /*
@@ -553,7 +553,7 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
       ZZ9K_Z3660_REG_SIZE,
       4, zz9k_regoff_z3660, zz9k_modes_z3660,
       ZZ9K_Z3660_CON_W, ZZ9K_Z3660_CON_H,
-      ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, 1,
+      ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, ZZ9K_PRODUCT_Z3660,
       ZZ9K_BT_AGAGATE | ZZ9K_BT_NOCAPTURE | ZZ9K_BT_BLIT_Z3660 | ZZ9K_BT_UNIQUE,
       zz9k_regwin_z3660, zz9k_sens_z3660 },
 #endif /* ZZ9K_TARGET_Z3660 */

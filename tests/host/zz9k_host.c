@@ -1281,6 +1281,41 @@ t_sensors()
     EQ(kmonsw_lastcloses, lc, "its close does not touch the monitor switch");
 }
 
+/* every row names its board: no two boards share GETINFO's (zorro, product) */
+static void
+t_identity()
+{
+    int i, j, bad;
+    struct zz9k_info info;
+
+    for (i = 0, bad = 0; i < ZZ9K_NBOARDTAB; ++i)
+        for (j = 0; j < ZZ9K_NBOARDTAB; ++j)
+            if (zz9k_boardtab[i].zorro == zz9k_boardtab[j].zorro &&
+                zz9k_boardtab[i].product == zz9k_boardtab[j].product &&
+                zz9k_boardtab[i].regoff != zz9k_boardtab[j].regoff)
+                ++bad;
+    EQ(bad, 0, "one (zorro, product) per board");
+    for (i = 0, bad = 0; i < ZZ9K_NBOARDTAB; ++i) {
+        info.zorro = zz9k_boardtab[i].zorro;
+        info.product = zz9k_boardtab[i].product;
+        if (ZZ9K_IS_Z3660(&info) + ZZ9K_IS_ZZ9000_Z2(&info) + ZZ9K_IS_ZZ9000_Z3(&info) != 1)
+            ++bad;
+        if (ZZ9K_IS_Z3660(&info) != (zz9k_boardtab[i].regw == 4))
+            ++bad;
+        if (ZZ9K_IS_Z3660(&info) != !!(zz9k_boardtab[i].flags & ZZ9K_BT_NOCAPTURE))
+            ++bad;
+    }
+    EQ(bad, 0, "each row is exactly one of Z3660, ZZ9000 Zorro II, ZZ9000 Zorro III");
+    EQ(ioc(ZZ9KIOC_GETINFO, 64, &info, sizeof info, FREAD, &kuser), 0, "GETINFO");
+#if HOST_Z3660
+    CHECK(ZZ9K_IS_Z3660(&info), "the attached board says Z3660");
+#elif defined(ZZ9K_HOST_ZZ9000Z3)
+    CHECK(ZZ9K_IS_ZZ9000_Z3(&info), "the attached board says ZZ9000 Zorro III");
+#else
+    CHECK(ZZ9K_IS_ZZ9000_Z2(&info), "the attached board says ZZ9000 Zorro II");
+#endif
+}
+
 static void
 t_layout()
 {
@@ -1387,6 +1422,7 @@ char **argv;
     t_fill();
     t_rect();
     t_layout();
+    t_identity();
     t_getmodes();
     t_sensors();
 #ifdef ZZ9K_HOST_ZZ9000Z3

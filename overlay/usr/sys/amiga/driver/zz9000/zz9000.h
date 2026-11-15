@@ -164,6 +164,23 @@ struct zz9k_autocon_dump {
     unsigned short pad;
     struct zz9k_autocon_entry entry[ZZ9K_MAX_AUTOCON];
 };
+/*
+ * Which board a unit is: GETINFO's zorro and product, together, name it.  The driver gives
+ * no two of its boards the same pair (product is the board's AutoConfig product number;
+ * the manufacturers differ, MNT 0x6d6e and the Z3660's 0x144b, but no product number is
+ * shared):
+ *
+ *   zorro 3, product 1   the Z3660 accelerator's onboard RTG (AutoConfig or fixed base)
+ *   zorro 2, product 3   an MNT ZZ9000 card as a Zorro II board
+ *   zorro 3, product 4   an MNT ZZ9000 card as a Zorro III board
+ *
+ * Only a ZZ9000 has the capture path (one monitor for RTG and the Amiga picture).
+ */
+#define ZZ9K_PRODUCT_Z3660     1
+#define ZZ9K_IS_Z3660(ip)      ((ip)->zorro == 3 && (ip)->product == ZZ9K_PRODUCT_Z3660)
+#define ZZ9K_IS_ZZ9000_Z2(ip)  ((ip)->zorro == 2 && (ip)->product == ZZ9K_PRODUCT_Z2)
+#define ZZ9K_IS_ZZ9000_Z3(ip)  ((ip)->zorro == 3 && (ip)->product == ZZ9K_PRODUCT_Z3)
+
 struct zz9k_info {
     unsigned long base;
     unsigned long board_size;
