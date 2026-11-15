@@ -218,8 +218,10 @@ as Zorro II". `GETINFO` gives `zorro` 3 and `product` 4. The device is its frame
 `0x31F0000` bytes (the part of the 128 MB window the firmware leaves to the RTG driver; the
 rest is the firmware's heap, mailbox and audio rings), mapped from offset 0 like the other
 boards. In a real Zorro III slot the board lies above the kernel's first gigabyte, so the
-module maps its register page and the start of its framebuffer for the kernel: 8 MiB on the
-68040/68060 line, 2 MiB on the 68030 line (the `kvfb` parameter, in MiB). User `mmap` reaches
+module maps its register page and the start of its framebuffer for the kernel: up to 8 MiB on
+the 68040/68060 line, 2 MiB on the 68030 line (the `kvfb` parameter, in MiB; a request the
+kernel cannot meet halves, and on the 68040/68060 line, whose kernel arena is 8 MiB shared with
+the heap, 4 MiB is what the emulator rows get). User `mmap` reaches
 the whole framebuffer either way. `read`, `write`, `FILL` and the CPU paths of `FILLRECT` and
 `COPYRECT` reach only the mapped part (`ENXIO` beyond it), as on a Z3660 above 1 GB.
 

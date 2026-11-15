@@ -57,7 +57,8 @@ left unchanged.
 - **Module parameters** (`module/z3660rtg.keys`): `blit` (1: use the card's blitter),
   `maxarea` (pixels per blitter band, default 8192), `fixed` (0: find the board only
   through its AutoConfig entry, as a real Z3660 is found; 1 also tries the fixed base at
-  `0x10000000`, which amiberry's Z3660 stand-in needs) and `kvfb` (MiB of a framebuffer
+  `0x10000000`, which amiberry's Z3660 RTG stand-in needs, on a machine whose AutoConfig list
+  holds the Z3660) and `kvfb` (MiB of a framebuffer
   above 1 GB mapped for the kernel). The static driver's
   `zz9k_blit_on`, `zz9k_blit_maxarea` and `zz9k_fixed_on` are the same knobs; a
   `-DZZ9K_BENCH_Z3660` build turns `zz9k_fixed_on` on.

@@ -526,11 +526,12 @@ long zz9k_blit_maxarea = ZZ9K_BLIT_MAXAREA_DEFAULT;
 
 /*
  * Kernel-patchable (the module's `fixed` parameter): zz9k_fixed_on 1 lets the probe try the
- * fixed-base rows, whose board has no AutoConfig entry.  Off by default: such a probe reads
- * a fixed address on any machine with the right chipset, and on one without the board that
- * can bus-error or hit another card's memory.  A real Z3660 is found through its AutoConfig
- * entry.  The bench build (-DZZ9K_BENCH_Z3660) turns it on for amiberry's Z3660 stand-in,
- * which has no entry.
+ * fixed-base rows, whose board has no AutoConfig entry of its own.  Off by default: such a
+ * probe reads a fixed address, and where nothing answers there it costs a bus timeout or hits
+ * another card's memory.  Even when set, the fixed base is read only on a machine whose
+ * AutoConfig list holds the board (zz9k_board_listed).  A real Z3660 is found through its
+ * AutoConfig entry.  The bench build (-DZZ9K_BENCH_Z3660) turns it on for amiberry's Z3660
+ * stand-in.
  */
 #ifdef ZZ9K_BENCH_Z3660
 int zz9k_fixed_on = 1;
@@ -863,7 +864,12 @@ long size;
 #ifdef ZZ9K_DEV_KVMAP
 extern char *dev_kvmap();
 extern void dev_kvunmap();
-#define ZZ9K_KVFB_DEFAULT  8        /* MiB: a 1920x1080 console's pan ring */
+/*
+ * MiB: room for a console's pan ring.  The arena dev_kvmap draws from is 8 MiB on current
+ * kernels (4 MiB on older ones) and the kernel heap shares it, so the request halves, to 4
+ * MiB where that much is free: the console then scrolls by copying.
+ */
+#define ZZ9K_KVFB_DEFAULT  8
 #else
 extern char *sptalloc();
 extern void sptfree();
@@ -1033,6 +1039,32 @@ struct zz9k_boardtab *bt;
     return 0;
 }
 
+/*
+ * The machine has row bt's board: a row of the same board with an AutoConfig identity finds
+ * it in the list (a read of the boot record, no bus cycle).  A fixed-base row is probed only
+ * then, so `fixed` set on a machine without a Z3660 never reads an address nobody decodes
+ * (a bus timeout, or another card's memory).  A Z3660 is always listed: on real hardware its
+ * board, under amiberry the accelerator's entry beside the RTG stand-in.  The bench build
+ * (-DZZ9K_BENCH_Z3660) keeps the old rule for a stand-in without any entry.
+ */
+static int
+zz9k_board_listed(bt)
+struct zz9k_boardtab *bt;
+{
+#ifdef ZZ9K_BENCH_Z3660
+    return 1;
+#else
+    struct zz9k_boardtab *t;
+    long b, s;
+
+    for (t = zz9k_boardtab; t < &zz9k_boardtab[ZZ9K_NBOARDTAB]; ++t)
+        if (t->autocon_pc && t->product == bt->product && t->zorro == bt->zorro &&
+            t->regoff == bt->regoff && autocon(t->autocon_pc, 0, &b, &s))
+            return 1;
+    return 0;
+#endif
+}
+
 /* The lowest unit without a board, or 0. */
 static struct zz9k_board *
 zz9k_free_unit()
@@ -1101,6 +1133,11 @@ zz9k_scan()
                 continue;
             base = (long)bt->fixed_base;
             size = (long)bt->fixed_size;
+            if (!zz9k_board_listed(bt)) {
+                printf("zz9000: %s at 0x%x not probed: the board is not in the AutoConfig list\n",
+                    bt->name, (unsigned int)base);
+                continue;
+            }
             if (!zz9k_held(base))
                 (void)zz9k_try(bt, base, size);
             continue;

@@ -4,6 +4,7 @@
 # One object for the Z3660's onboard RTG and MNT ZZ9000 cards (Zorro II and III), two
 # units (README.md, zz9000.7).  kvfb: MiB of a board above 1 GB mapped for the kernel,
 # 0 = the line's default (8 on k46, 2 on k30; a ZZ9000's 1920x800 console needs 3 on k30).
+# A request the kernel cannot meet halves: on k46 the arena is 8 MiB, shared, so 4 is typical.
 name=z3660rtg
 class=demand
 majors=c:49

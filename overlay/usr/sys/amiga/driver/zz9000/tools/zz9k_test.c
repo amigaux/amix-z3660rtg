@@ -29,14 +29,17 @@ static void zz9k_hold();
 static void
 print_z2_expected()
 {
-    printf("Expected ZZ9000 Zorro II config for AMIX:\n");
-    printf("  manufacturer  : 0x%04x\n", ZZ9K_MNT_MANUFACTURER);
-    printf("  product       : 0x%02x (Zorro II)\n", ZZ9K_PRODUCT_Z2);
-    printf("  unsupported   : product 0x%02x (Zorro III)\n", ZZ9K_PRODUCT_Z3);
-    printf("  register base : board base + 0x00000000\n");
-    printf("  framebuffer   : board base + 0x%08lx\n", ZZ9K_FB_OFFSET);
-    printf("  Z2 fb size    : board size - 0x%08lx\n",
+    printf("Boards the driver attaches:\n");
+    printf("  ZZ9000 Zorro II : manufacturer 0x%04x product 0x%02x\n",
+        ZZ9K_MNT_MANUFACTURER, ZZ9K_PRODUCT_Z2);
+    printf("  ZZ9000 Zorro III: manufacturer 0x%04x product 0x%02x (above 1 GB: mapped)\n",
+        ZZ9K_MNT_MANUFACTURER, ZZ9K_PRODUCT_Z3);
+    printf("  Z3660 RTG       : the accelerator's own (the Z3660 build)\n");
+    printf("  ZZ9000 framebuffer: board base + 0x%08lx; the device is the framebuffer alone\n",
+        ZZ9K_FB_OFFSET);
+    printf("  Zorro II fb size  : board size - 0x%08lx\n",
         ZZ9K_FB_OFFSET + ZZ9K_Z2_RESERVED_TAIL);
+    printf("  Zorro III fb size : 0x%08lx\n", ZZ9K_Z3_FB_MAX);
     printf("\n");
 }
 
@@ -219,14 +222,7 @@ int fd;
         printf("  MODE          @0x%04x = 0x%04x\n", ZZ9K_REG_MODE, v);
     else
         perror("  MODE");
-    if (getreg(fd, ZZ9K_REG_CONFIG, &v) == 0)
-        printf("  CONFIG        @0x%04x = 0x%04x\n", ZZ9K_REG_CONFIG, v);
-    else
-        perror("  CONFIG");
-    if (getreg(fd, ZZ9K_REG_VCAP_MODE, &v) == 0)
-        printf("  VCAP_MODE     @0x%04x = 0x%04x\n", ZZ9K_REG_VCAP_MODE, v);
-    else
-        perror("  VCAP_MODE");
+    /* CONFIG and VCAP_MODE are outside the driver's register list: GETREG refuses them */
     printf("\n");
 }
 /*
@@ -390,8 +386,10 @@ int fd;
         if (e->manufacturer == ZZ9K_MNT_MANUFACTURER &&
             e->product == ZZ9K_PRODUCT_Z3) {
             found |= 2;
-            printf(" ZZ9000-Z3 unsupported-on-AMIX");
+            printf(" ZZ9000-Z3");
         }
+        if (((unsigned long)e->manufacturer << 16 | e->product) == ZZ9K_Z3660_PRODUCT_PC)
+            printf("  Z3660");
         printf("\n");
     }
     return found;
@@ -424,6 +422,7 @@ char **argv;
     devname = "/dev/zz9000";
     if (argc > 1)
         devname = argv[1];
+    setbuf(stdout, (char *)0);          /* the log ends where the program did */
 
     print_z2_expected();
 
@@ -435,19 +434,14 @@ char **argv;
     }
 
     found = print_autocon(fd);
-    if ((found & 1) == 0) {
-        if (found & 2)
-            printf("Only ZZ9000-Z3/product 4 is present. AMIX driver requires Z2/product 3.\n");
-        else
-            printf("No ZZ9000 autocon entry found.\n");
-        printf("Asking the kernel driver anyway (it may know a board the table does not).\n");
-    }
+    if (found == 0)
+        printf("No ZZ9000 autocon entry; asking the kernel driver (it finds a Z3660 RTG itself).\n");
 
     rc = ioctl(fd, ZZ9KIOC_PROBE, 0);
     if (rc < 0) {
         perror("ZZ9KIOC_PROBE");
         printf("No supported board was found. No framebuffer test run.\n");
-        printf("If the table shows ZZ9000-Z3/product 4, reconfigure the card for Zorro II.\n");
+        printf("The kernel's zz9000: lines say why (modadmin -L, or the console).\n");
         close(fd);
         return 1;
     }
@@ -616,9 +610,9 @@ char **argv;
     test_bpp = (mode.color_mode == ZZ9K_COLOR_32BIT) ? 4 : 2;
     test_bytes = (unsigned long)mode.width * mode.height * test_bpp;
     if (test_bytes > info.fb_size) {
-        printf("Requested test needs 0x%lx bytes, but Z2 framebuffer has 0x%lx bytes.\n",
+        printf("Requested test needs 0x%lx bytes, but the framebuffer has 0x%lx bytes.\n",
             test_bytes, info.fb_size);
-        printf("At 32-bit, try 1280x720 or 1024x768. At 16-bit, try up to 1600x1200 or 1920x800.\n");
+        printf("On a Zorro II card: at 32-bit try 1280x720 or 1024x768, at 16-bit up to 1600x1200 or 1920x800.\n");
         close(fd);
         return 1;
     }

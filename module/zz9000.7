@@ -108,6 +108,11 @@ with the default 2 MiB a ZZ9000's framebuffer console takes 1280x720 instead
 of its 1920x800 and says so;
 .B kvfb=3
 gives it the full mode.
+On the 68040/68060 line the mapping comes from the kernel's virtual arena,
+which the kernel heap shares; the default request (8 MiB) is more than the
+arena has free, so it halves, and the attach line prints what was mapped
+(typically 4 MiB).
+The console then fits but scrolls by copying the screen instead of panning.
 .SH PARAMETERS
 Set in
 .I /etc/conf/modreg.local.d/z3660rtg
@@ -125,12 +130,15 @@ The ZZ9000's blitter is not used.
 0 (the default): the Z3660 is found through its AutoConfig entry, as on a
 real machine; 1: its fixed base at
 .B 0x10000000
-is also tried, which emulators without that entry need.
+is also tried, which emulators without that entry need, but only when the
+AutoConfig list holds the Z3660 (manufacturer 0x144B, product 1): on a machine
+without one the base is not read, and the console says so.
 .TP
 .B kvfb
 MiB of the framebuffer of a board above 1 GB mapped for the kernel, 1 to 46;
 0 (the default) is the line's default, 8 on the 68040/68060 line and 2 on the
 68030 line.
+A request the kernel cannot meet is halved until it can, down to 1.
 .TP
 .B maxarea
 Pixels per blitter band (0 is the default, 8192): the CPU waits in one

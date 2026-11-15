@@ -1160,6 +1160,32 @@ t_z3_static()
 }
 #endif
 
+/* re-probes: the attach prints each of its lines once (one printf per line, no echo) */
+static void
+t_attach_once()
+{
+    char *l[32], *p, *q;
+    int n, i, j, dup;
+
+    zz9k_boards[0].base = 0;
+    zz9k_boards[1].base = 0;
+    zz9k_noboard[0] = zz9k_noboard[1] = 0;
+    klogn = 0;
+    klog[0] = 0;
+    EQ(zz9k_probe(0), 1, "re-probe for the attach lines");
+    for (n = 0, p = klog; *p && n < 32; p = q + 1) {
+        l[n++] = p;
+        q = strchr(p, '\n');
+        if (!q)
+            break;
+    }
+    for (dup = 0, i = 0; i < n; ++i)
+        for (j = i + 1; j < n; ++j)
+            if (strncmp(l[i], l[j], strcspn(l[i], "\n") + 1) == 0)
+                dup = 1;
+    CHECK(n > 0 && !dup, "every attach line printed once");
+}
+
 /* last: re-probes the board */
 static void
 t_fixed()
@@ -1176,17 +1202,28 @@ t_fixed()
     CHECK(bp->bt && bp->bt->autocon_pc == ZZ9K_Z3660_PRODUCT_PC, "the Z3660 found after it");
     kboards[1].pc = 0;
 
-    kboards[0].pc = 0;          /* a machine whose AutoConfig list lacks the board */
+    kboards[0].pc = 0;          /* a machine without a Z3660: the board is not listed */
     bp->base = 0;
     zz9k_fixed_on = 0;
     EQ(zz9k_probe(0), 0, "no fixed-base probe by default");
     zz9k_fixed_on = 1;
+    zz9k_noboard[0] = 0;
+    klogn = 0;
+    EQ(zz9k_probe(0), 0, "nor with fixed=1 on a machine without the board");
+    CHECK(strstr(klog, "(fixed base) at 0x10000000 not probed") != 0 &&
+        strstr(klog, "no Z3660 RTG (fixed base)") == 0, "the fixed base is not read, and it says so");
     klogn = 0;
     EQ(zz9k_probe(0), 0, "a failed probe is remembered");
     EQ(klogn, 0, "and says nothing the second time");
+    /* amiberry's Z3660: the accelerator's entry listed but not the RTG, the RTG at the fixed base */
+    kboards[0].pc = ZZ9K_Z3660_PRODUCT_PC;
+    kboards[0].base = (long)(WIN + 0x4000000UL);
+    kboards[0].size = 0x01000000L;
     zz9k_noboard[0] = 0;
-    EQ(zz9k_probe(0), 1, "the fixed row when asked");
+    klogn = 0;
+    EQ(zz9k_probe(0), 1, "the fixed row when asked, on a machine that lists the board");
     CHECK(bp->bt && bp->bt->autocon_pc == 0, "attached by the fixed row");
+    CHECK(strstr(klog, "did not look like ZZ9000 regs") != 0, "after the listed entry did not answer");
     *(volatile unsigned short *)0xdff004UL = 0x0000;     /* OCS Agnus */
     bp->base = 0;
     EQ(zz9k_probe(0), 0, "and only on an AGA machine");
@@ -1640,6 +1677,7 @@ char **argv;
 #ifdef ZZ9K_HOST_ZZ9000Z3
     t_zz9000z3();
 #endif
+    t_attach_once();
     t_fixed();
 #ifndef ZZ9K_TARGET_Z3660
     t_z3_static();
