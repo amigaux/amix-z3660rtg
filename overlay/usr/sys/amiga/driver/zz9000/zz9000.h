@@ -460,6 +460,7 @@ struct zz9k_conputs {
 #define ZZ9K_BT_NOCAPTURE      0x0004  /* no native-video capture path: SETSWITCH is a no-op */
 #define ZZ9K_BT_BLITTER        0x0008  /* FILLRECT/COPYRECT/BLITS use the card's blitter */
 #define ZZ9K_BT_CONFIT         0x0010  /* the console takes a smaller mode that the kernel's part holds */
+#define ZZ9K_BT_UNIQUE         0x0020  /* one per machine: once attached, its other rows are skipped */
 
 struct zz9k_modetab {
     unsigned short width;

@@ -227,3 +227,14 @@ The console needs its 1920x800 mode in the mapped part (3 MiB). On the 68030 lin
 default 2 MiB, it takes the largest mode that fits (1280x720) and prints which and why;
 `kvfb=3` gives it the full mode. The static driver without mappings still refuses a board
 above 1 GB, with that advice.
+
+## Two boards: units 0 and 1
+
+The driver serves two boards, each with its own state: minor 0 (`/dev/zz9000`, information
+node `/dev/zz9000i`, minor 128) and minor 1 (`/dev/zz9001`, `/dev/zz9001i`, minor 129).
+Boards are given units in a fixed order: the Z3660's onboard RTG first, then ZZ9000 cards
+(Zorro II, then Zorro III), whatever order AutoConfig lists them in. A machine with a Z3660
+keeps it on `/dev/zz9000` when a ZZ9000 card is added; the card is `/dev/zz9001`. With one
+board, unit 1 answers `ENXIO`. The kernel framebuffer console runs on one board at a time,
+the one whose `ZZ9KIOC_CONSOLE` enabled it. `mkdev.sh` makes the unit 1 nodes; a package
+that ships the nodes needs them too.
