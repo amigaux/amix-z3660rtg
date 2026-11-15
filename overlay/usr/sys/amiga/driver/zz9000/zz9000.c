@@ -447,6 +447,19 @@ static struct zz9k_sensreg zz9k_sens_z3660[ZZ9K_SENS_N] = {
  * needed.  -DZZ9K_NO_BLITTER builds the Z3660 rows without it (the CPU loops,
  * as before); -DZZ9K_BENCH_BLIT gives it to the ZZ9000 rows, a bench aid for
  * amiberry's emulated blitter, not a statement about the real ZZ9000.
+ *
+ * The ZZ9000's firmware is synchronous in the same way: a register write below
+ * the card's 0x2000 is held (no DTACK) until the ARM acknowledges it
+ * (mntzorro.v Z2_WRITE_FINALIZE/Z3_WRITE_FINALIZE wait for REG0 bit 31), and the
+ * ARM acknowledges only after the register's case has run, FILLRECT and
+ * COPYRECT included (ZZ9000OS main.c, the ack after the write switch).  The
+ * ZZ9000 rows still leave the blitter off: no run on a real card has shown its
+ * fills and copies coherent with the CPU's own framebuffer accesses (the ARM
+ * draws through its cache, the Zorro side reads DDR directly) or measured how
+ * long a band holds the bus on a 68030.  Before ZZ9K_BENCH_BLIT becomes the
+ * default, the emulator rows (zz9000z2 and zz9000, both lines: zz9k_test's
+ * fill/copy page and an X session with the card blitter) and one real card
+ * must pass.
  */
 #ifdef ZZ9K_NO_BLITTER
 #define ZZ9K_BT_BLIT_Z3660     0
@@ -1123,15 +1136,17 @@ unsigned short color;
 
     zz9k_bwr32(bp, ZZ9K_R_DST, 0);
     /*
-     * The Z3660 firmware byte-reverses the RGB register (rtg.c REG_ZZ_RGB:
-     * rect_rgb = swap32 of the value written) and a 16-bit fill takes the low
-     * half of that (gfx.c fill_rect_solid), i.e. the high half as written: a
-     * colour in the low half fills with 0 (measured on the bench, 2026-09-29).
+     * A 16-bit fill colour goes in the high half of RGB on both firmwares.  The Z3660's
+     * byte-reverses the 32-bit RGB register (rtg.c REG_ZZ_RGB: rect_rgb = swap32 of the
+     * value written) and a 16-bit fill takes the low half of that (gfx.c fill_rect_solid),
+     * i.e. the high half as written: a colour in the low half fills with 0 (measured on
+     * the bench, 2026-09-29).  The ZZ9000's takes RGB as two 16-bit registers and puts
+     * RGB_HI (0x1E), byte-swapped, in rect_rgb's low half and RGB_LO (0x20) in its high
+     * half (ZZ9000OS main.c REG_ZZ_RGB_HI/LO); fill_rect_solid stores that low half with
+     * memset16 into the little-endian framebuffer (gfx.c), which the Amiga reads back as
+     * the value written to RGB_HI.  So wr32's HI write carries the colour, its LO write 0.
      */
-    if (bp->bt->regw == 4)
-        zz9k_bwr32(bp, ZZ9K_R_RGB, (unsigned long)color << 16);
-    else
-        zz9k_bwr32(bp, ZZ9K_R_RGB, (unsigned long)color);
+    zz9k_bwr32(bp, ZZ9K_R_RGB, (unsigned long)color << 16);
     zz9k_bwr(bp, ZZ9K_R_ROW_PITCH,
         (unsigned long)((bp->width * zz9k_bpp(bp->color_mode)) >> 2));
     /* the copy's value: FILLRECT ignores COLORMODE's mask byte, so fills and copies

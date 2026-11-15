@@ -304,6 +304,28 @@ t_capture()
 #endif
 }
 
+/*
+ * The fill colour's lane: a 16-bit colour in RGB's high half on both firmwares (the
+ * ZZ9000's RGB_HI at 0x1E, which it byte-swaps into the half fill_rect_solid stores).
+ */
+static void
+t_fill_lane()
+{
+    struct zz9k_board *bp = &zz9k_boards[0];
+
+    setmode(1280, 720);
+    ZZ9K_BLIT_FORGET(bp);
+    zz9k_blit_fill(bp, 0, 0, 8, 8, (unsigned short)0xf81f);
+#if HOST_Z3660
+    EQ(*reg32(ZZ9K_Z3660_REG_RGB), 0xf81f0000UL, "Z3660: one 32-bit write, the colour high");
+#else
+    EQ(*reg16(ZZ9K_REG_BLITTER_RGB_HI), 0xf81f, "ZZ9000: the colour in RGB_HI");
+    EQ(*reg16(ZZ9K_REG_BLITTER_RGB_LO), 0, "and 0 in RGB_LO");
+    EQ(*reg16(ZZ9K_REG_BLITTER_OP_FILLRECT), 0xff, "a solid fill (mask 0xFF)");
+#endif
+    ZZ9K_BLIT_FORGET(bp);
+}
+
 /* the device space: the framebuffer from offset 0, never the register page */
 static void
 t_devspace()
@@ -1165,6 +1187,7 @@ char **argv;
     t_privilege();
     t_devspace();
     t_capture();
+    t_fill_lane();
     t_allowlist();
     t_band();
     t_blits();
