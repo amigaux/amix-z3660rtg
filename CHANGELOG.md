@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-15 — zz9k_probe, the display start-up's probe (a431bed)
+
+`zz9k_probe z3660|zz9000` (tools/zz9k_probe.c, zz9k_probe(1M)) says which board is behind the driver, for the
+display.d card files. It reads only GETINFO through the information nodes /dev/zz9000i and /dev/zz9001i: a
+read-only open, one ioctl, a close. `z3660` exits 0 when unit 0 is the Z3660 and prints `node /dev/zz9000`.
+`zz9000` picks the first unit that is a ZZ9000 and prints its node; for a Zorro III card it adds a `modes` line
+with 1920x1080. A bad argument gives exit 2. Host test tests/host/zz9k_probe_test.sh. The driver source is
+unchanged and the module stays 1.1.2-1.
+
 ## 2026-11-15 — the emulator rows' findings; module 1.1.2-1 not yet published (06a1198..ee17d34)
 
 The fixed base 0x10000000 is read only when the AutoConfig list holds the Z3660, so `fixed=1` on a machine without one
