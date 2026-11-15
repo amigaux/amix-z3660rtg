@@ -1157,6 +1157,32 @@ t_z3_static()
 }
 #endif
 
+/* re-probes: the attach prints each of its lines once (one printf per line, no echo) */
+static void
+t_attach_once()
+{
+    char *l[32], *p, *q;
+    int n, i, j, dup;
+
+    zz9k_boards[0].base = 0;
+    zz9k_boards[1].base = 0;
+    zz9k_noboard[0] = zz9k_noboard[1] = 0;
+    klogn = 0;
+    klog[0] = 0;
+    EQ(zz9k_probe(0), 1, "re-probe for the attach lines");
+    for (n = 0, p = klog; *p && n < 32; p = q + 1) {
+        l[n++] = p;
+        q = strchr(p, '\n');
+        if (!q)
+            break;
+    }
+    for (dup = 0, i = 0; i < n; ++i)
+        for (j = i + 1; j < n; ++j)
+            if (strncmp(l[i], l[j], strcspn(l[i], "\n") + 1) == 0)
+                dup = 1;
+    CHECK(n > 0 && !dup, "every attach line printed once");
+}
+
 /* last: re-probes the board */
 static void
 t_fixed()
@@ -1439,6 +1465,7 @@ char **argv;
 #ifdef ZZ9K_HOST_ZZ9000Z3
     t_zz9000z3();
 #endif
+    t_attach_once();
     t_fixed();
 #ifndef ZZ9K_TARGET_Z3660
     t_z3_static();
