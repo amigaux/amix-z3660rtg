@@ -206,13 +206,43 @@ t_privilege()
         "monitor-switch Get, read-only");
     EQ(ioc(ZZ9KIOC_GETINFO, 4, &info, sizeof info, FREAD, &kuser), EFAULT,
         "a bad user address gives EFAULT");
-    /* read(2): the register block is privileged, the framebuffer is not */
-#ifdef ZZ9K_TARGET_Z3660
-    EQ(kread(0L, 16L, &kuser), 0, "Z3660 device space is all framebuffer");
-#else
-    EQ(kread(0L, 16L, &kuser), EPERM, "register block read unprivileged");
-    EQ(kread(0L, 16L, &kroot), 0, "register block read as root");
-    EQ(kread((long)ZZ9K_FB_OFFSET, 16L, &kuser), 0, "framebuffer read unprivileged");
+    /* read(2): the device is the framebuffer alone, on every board */
+    EQ(kread(0L, 16L, &kuser), 0, "device space is all framebuffer, unprivileged");
+}
+
+/* the device space: the framebuffer from offset 0, never the register page */
+static void
+t_devspace()
+{
+    struct zz9k_board *bp = &zz9k_boards[0];
+    struct zz9k_info info;
+    struct zz9k_fbinfo fbi;
+    static char buf[16];
+    struct uio u;
+    unsigned long off;
+    int bad;
+
+    EQ(ioc(ZZ9KIOC_GETINFO, 64, &info, sizeof info, FREAD, &kuser), 0, "GETINFO");
+    EQ(ioc(ZZ9KIOC_GETFBINFO, 256, &fbi, sizeof fbi, FREAD, &kuser), 0, "GETFBINFO");
+    EQ(info.fb_offset, 0, "GETINFO.fb_offset 0");
+    EQ(fbi.fb_offset, 0, "GETFBINFO.fb_offset 0");
+    EQ(info.board_size, info.fb_offset + info.fb_size, "board_size is the device: fb_offset + fb_size");
+    /* every page of the device maps a framebuffer page; none maps the register page */
+    for (off = 0, bad = 0; off < info.board_size; off += 4096)
+        if (zz9000mmap(0, (off_t)off, 0) != phystopfn(bp->phys + bp->bt->fb_phys + off))
+            ++bad;
+    EQ(bad, 0, "mmap: device offset n is framebuffer byte n");
+    EQ(zz9000mmap(0, (off_t)info.board_size, 0), -1, "mmap past the device refused");
+    EQ(zz9000mmap(0, (off_t)-4096, 0), -1, "a negative offset refused");
+    CHECK(phystopfn(bp->phys + bp->bt->fb_phys) > phystopfn(bp->phys + 0xfff),
+        "the register page's frame lies below the device's first");
+    memcpy(bp->fb, "FRAMEBUF", 8);
+    u.uio_offset = 0; u.uio_resid = 8; u.uio_ubase = buf;
+    EQ(zz9000read(0, &u, &kuser), 0, "read(2) of offset 0, unprivileged");
+    CHECK(memcmp(buf, "FRAMEBUF", 8) == 0, "offset 0 is the framebuffer's first byte");
+#ifndef ZZ9K_TARGET_Z3660
+    EQ(info.fb_size, 0x00400000L - 0x10000L - 0x20000L, "Zorro II: 4 MB less registers and tail");
+    CHECK(bp->fb == (char *)(WIN + 0x10000), "the framebuffer at +0x10000");
 #endif
 }
 
@@ -1039,6 +1069,7 @@ char **argv;
     t_mapped_short();           /* ends mapped with 8 MiB, for the console tests below */
 #endif
     t_privilege();
+    t_devspace();
     t_allowlist();
     t_band();
     t_blits();

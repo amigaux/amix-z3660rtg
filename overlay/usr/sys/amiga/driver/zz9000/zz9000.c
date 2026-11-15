@@ -482,9 +482,15 @@ int zz9k_fixed_on = 0;
 #endif
 
 static struct zz9k_boardtab zz9k_boardtab[] = {
+    /*
+     * Device space is the framebuffer alone (fb_offset 0, physically at +0x10000): the
+     * register page below it also holds the firmware-update, SD, USB, ethernet and
+     * video-timing registers (zz_regs.h 0x80-0xFE), so it is never mapped or read through
+     * the device; GETREG/SETREG reach the row's own registers only.
+     */
     { "Zorro II board", "",
       ZZ9K_PRODUCT_PC_Z2, 0, 0,
-      ZZ9K_FB_OFFSET, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
+      0, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
       2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
       ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
       ZZ9K_FW_VER_MIN, 0, 2, ZZ9K_PRODUCT_Z2, ZZ9K_BT_BLIT_ZZ9000,
@@ -492,7 +498,7 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
 #ifndef ZZ9K_BENCH_Z3
     { "Zorro III product", "configure card as Zorro II product 3 for AMIX",
       ZZ9K_PRODUCT_PC_Z3, 0, 0,
-      ZZ9K_FB_OFFSET, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
+      0, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
       2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
       ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
       ZZ9K_FW_VER_MIN, 0, 3, ZZ9K_PRODUCT_Z3, ZZ9K_BT_REJECT,
@@ -509,7 +515,7 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
      */
     { "Zorro III board (bench)", "",
       ZZ9K_PRODUCT_PC_Z3, 0, 0,
-      ZZ9K_FB_OFFSET, ZZ9K_FB_OFFSET, ZZ9K_Z3660_FB_MAX, 0, ZZ9K_REG_SIZE,
+      0, ZZ9K_FB_OFFSET, ZZ9K_Z3660_FB_MAX, 0, ZZ9K_REG_SIZE,
       2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
       ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
       ZZ9K_FW_VER_MIN, 0, 3, ZZ9K_PRODUCT_Z3, ZZ9K_BT_BLIT_ZZ9000,
@@ -705,16 +711,18 @@ unsigned long kfblen;
     bp->phys = base;
     bp->mapped = kregs != 0;
 
-    if (bt->fb_max) {
+    /*
+     * board_size is the device space: fb_offset (0 on every row) and the framebuffer,
+     * what read(2), write(2) and mmap(2) reach and what GETINFO reports, so a client may
+     * map board_size bytes from offset 0.
+     */
+    if (bt->fb_max)
         bp->fb_size = bt->fb_max;
-        bp->board_size = bt->fb_offset + bp->fb_size;
-    } else {
-        bp->board_size = (unsigned long)size;
-        if (bp->board_size > bt->fb_offset + bt->reserved_tail)
-            bp->fb_size = bp->board_size - bt->fb_offset - bt->reserved_tail;
-        else
-            bp->fb_size = 0;
-    }
+    else if ((unsigned long)size > bt->fb_phys + bt->reserved_tail)
+        bp->fb_size = (unsigned long)size - bt->fb_phys - bt->reserved_tail;
+    else
+        bp->fb_size = 0;
+    bp->board_size = bt->fb_offset + bp->fb_size;
     bp->fb = (char *)base + bt->fb_phys;
     bp->fb_kmap = bp->fb_size;
     if (kregs) {
@@ -1073,9 +1081,10 @@ unsigned long value;
 }
 
 /*
- * Device space as seen through read/write/mmap: [0, fb_offset) is the
- * register block, [fb_offset, board_size) the framebuffer.  On a row whose
- * framebuffer is not contiguous with its registers the two are joined here.
+ * Device space as seen through read/write/mmap: [0, fb_offset) would be a
+ * register block and [fb_offset, board_size) is the framebuffer.  Every row
+ * has fb_offset 0: the device is the framebuffer alone, wherever it lies in
+ * the board's window (fb_phys).
  */
 static char *
 zz9k_devphys(bp, off)
@@ -2421,7 +2430,7 @@ struct cred *cr;
         count = limit - (unsigned long)uiop->uio_offset;
     if (direction == UIO_WRITE && count == 0)
         return ENXIO;
-    /* the register block, as GETREG/SETREG, is privileged; the framebuffer is not */
+    /* a register block (no row has one: fb_offset 0) would be privileged, as GETREG/SETREG */
     if ((unsigned long)uiop->uio_offset < bp->bt->fb_offset && drv_priv(cr))
         return EPERM;
 
@@ -2473,6 +2482,9 @@ int maxprot;
         return -1;
     bp = &zz9k_boards[unit];
     if (offset < 0 || (unsigned long)offset >= bp->board_size)
+        return -1;
+    /* never the register page, whatever a row says: GETREG/SETREG reach it */
+    if ((unsigned long)offset < bp->bt->fb_offset)
         return -1;
 
     return phystopfn(zz9k_devpa(bp, (unsigned long)offset));

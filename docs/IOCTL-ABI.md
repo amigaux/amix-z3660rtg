@@ -12,7 +12,9 @@ calls the driver: the X server (`Xzz9000`, the x11r6.3 package), the tools here,
 | `SETMODE`, `SETPAN`, `FILL`, `FILLRECT`, `COPYRECT`, `CONPUTS`, `BLITS`, `SVGAIOCSetMonitorSwitch` | a descriptor open for writing, else `EBADF` |
 | `SETREG`, `CONSOLE`, `SETSWITCH` | open for writing (`EBADF`) and privilege (`EPERM`) |
 | `GETREG`, `PROBE` | privilege (`EPERM`) |
-| `read`/`write` of the register block (device offsets below `fb_offset`; ZZ9000 rows only) | privilege (`EPERM`) |
+
+`read`, `write` and `mmap` reach the framebuffer only, on every board (see the 1.1.x section
+at the end): the register page is reached through GETREG and SETREG alone.
 
 The node is `0660 root:sys` (`mkdev.sh`). The X server runs as root and opens the node
 read-write, so it is not affected.
@@ -169,3 +171,26 @@ firmware saturates every measurement at 200 units. A driver without this call an
 the monitor-switch Get. Anything else gives `EPERM`, even for root, and it has no `read`,
 `write` or `mmap`. Its close leaves the monitor switch and the console alone. Ordinary users
 can therefore run `ztop` and `xztop` while `/dev/zz9000` stays `0660`.
+
+# The 1.1.x changes (real ZZ9000 cards)
+
+## The device is the framebuffer alone, on the ZZ9000 too
+
+On the ZZ9000 Zorro II board the device used to start at the card's register page:
+offsets `0x0`-`0xFFFF` were the registers and `fb_offset` was `0x10000`. That page also
+holds the firmware-update, SD, USB, ethernet and video-timing registers (the firmware's
+`zz_regs.h` `0x80`-`0xFE`), and `mmap` handed it to any process that could open the node,
+with no privilege check (`read` and `write` had one). Now, as on the Z3660:
+
+- `GETINFO.fb_offset` and `GETFBINFO.fb_offset` are 0 on every board;
+- `GETINFO.board_size` is the size of the device: `fb_offset + fb_size`. On the Zorro II
+  card that is the 4 MB window less the register page (64 KB) and the firmware's tail
+  (128 KB), `0x3D0000`;
+- `mmap`, `read` and `write` of any offset reach the framebuffer; offsets at or beyond
+  `board_size` give `ENXIO` (`mmap`: no mapping). GETREG and SETREG are unchanged.
+
+A program that maps `board_size` bytes from offset 0 and draws at `fb_offset` (the X server,
+`zz9k_test`, `zz9k_maptest`) works as before. A program that hard-coded `0x10000` as the
+ZZ9000's framebuffer offset, or read registers through `read(2)`, no longer works; none of
+ours does.
+
