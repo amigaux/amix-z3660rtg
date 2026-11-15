@@ -27,11 +27,20 @@ a ZZ9000 card beside it is unit 1.
 |---|---|---|
 | `blit` | 1 | use the card's blitter where the board's row has it (the Z3660; not the ZZ9000) |
 | `fixed` | 0 | also look for the Z3660 at its fixed base (amiberry's Z3660 has no AutoConfig entry) |
-| `kvfb` | 0 | MiB of a framebuffer above 1 GB mapped for the kernel; 0 = the line's default, 8 on k46, 2 on k30 |
+| `kvfb` | 0 | MiB of a framebuffer above 1 GB mapped for the kernel; 0 = the line's default, 8 on k46, 2 on k30; a request the kernel cannot meet halves until it can |
 | `maxarea` | 8192 | pixels per blitter band (0 = the default) |
 
 On the 68030 line a ZZ9000 Zorro III card's console needs `kvfb=3` for its 1920x800 mode;
 with the default it takes 1280x720 and says so on the console.
+
+On the 68040/68060 line the mapping comes from the kernel's virtual arena (8 MiB on current
+kernels, 4 MiB on older ones), which the kernel heap shares, so the 8 MiB default is never
+met in full: the request halves and the attach line says what was mapped, `0x400000` (4 MiB)
+on the emulator rows. With 4 MiB the 1920x800 console fits (3 MiB) but has no room for its
+pan ring, so each scroll copies the screen (the CPU on a ZZ9000, slow across Zorro III);
+`read`, `write`, `FILL` and the CPU fills and copies reach the first 4 MiB (`ENXIO` beyond,
+which matters only for 16-bit modes above 1920x1080). User `mmap`, and so X, reach the
+whole framebuffer either way. `kvfb=3` leaves the kernel heap more room and keeps the console.
 
 ## Loading on the released kernels
 

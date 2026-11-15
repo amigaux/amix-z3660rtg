@@ -835,7 +835,12 @@ long size;
 #ifdef ZZ9K_DEV_KVMAP
 extern char *dev_kvmap();
 extern void dev_kvunmap();
-#define ZZ9K_KVFB_DEFAULT  8        /* MiB: a 1920x1080 console's pan ring */
+/*
+ * MiB: room for a console's pan ring.  The arena dev_kvmap draws from is 8 MiB on current
+ * kernels (4 MiB on older ones) and the kernel heap shares it, so the request halves, to 4
+ * MiB where that much is free: the console then scrolls by copying.
+ */
+#define ZZ9K_KVFB_DEFAULT  8
 #else
 extern char *sptalloc();
 extern void sptfree();
