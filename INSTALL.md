@@ -66,11 +66,17 @@ cd /usr/sys/amiga/driver/zz9000
 sh mkdev.sh
 ```
 
-The expected node is:
+The expected nodes are:
 
 ```text
-crw-rw-rw-  root root  49, 0  /dev/zz9000
+crw-rw----  root sys  49,   0  /dev/zz9000
+crw-rw----  root sys  49,   1  /dev/zz9001
+cr--r--r--  root sys  49, 128  /dev/zz9000i
+cr--r--r--  root sys  49, 129  /dev/zz9001i
 ```
+
+The board nodes stay 0660 root sys (the X server runs as root); the information nodes are
+0444 and answer only the read-only queries. Do not widen them.
 
 ## 5. Build and install tools
 

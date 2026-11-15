@@ -382,8 +382,8 @@ scripts, the console renderer's behaviour, the safety model (no console takeover
 `Xzz9000` and `zz9k_test` `mmap()` the whole `[0, board_size)` from offset 0 and only ever
 touch `base + fb_offset` (`zz9000hw.c:114,136`). If the Z3660 row exposed the *raw* window
 (`fb_offset = 0x200000`), the mapping would hand userland RW access to the piscsi mailbox
-(`+0x2000`), the boot ROM and the SCSI bounce buffer (`+0x80000`), and the node is `0666`
-(`mkdev.sh`). Proposal (accepted, refined twice): after Q8 the device space was the register page followed
+(`+0x2000`), the boot ROM and the SCSI bounce buffer (`+0x80000`), and the node was then `0666`
+(`mkdev.sh`; `0660 root sys` since 2026-11-01). Proposal (accepted, refined twice): after Q8 the device space was the register page followed
 by the framebuffer (`fb_offset 0x1000`, bench-proven in step 2); after the 68040/68060 port's
 finding that the same page carries the **ethernet driver's doorbells** (`+0x104..+0x1AB`,
 `amix-z3660net/src/z3660eth.h`), the Z3660 row's device space is **the framebuffer alone**
