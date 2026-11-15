@@ -6,9 +6,10 @@
  *
  * Board identity, window layout and register file are data: one row of
  * zz9k_boardtab[] per supported board (see zz9000.h).  The default rows
- * are the ZZ9000 Zorro II product 3 (attached) and the Zorro III product 4
- * (identified and refused: its window lies outside the kernel's
- * identity-mapped low 1 GB).  A target build (-DZZ9K_TARGET_...) adds rows.
+ * are the ZZ9000 Zorro II product 3 and the Zorro III product 4 (reached
+ * directly inside the identity-mapped low 1 GB, through kernel mappings
+ * above it in a build that has them).  A target build (-DZZ9K_TARGET_...)
+ * adds rows.
  * The DMA paths from the AmigaOS and NetBSD drivers are intentionally not
  * used here.
  */
@@ -43,7 +44,7 @@
 #include "sys/moddefs.h"
 #include "sys/amixddi.h"
 #ifdef ZZ9K_FB_NC
-#error "ZZ9K_FB_NC: hat_cm_fb_add is not in DDI v1, build the module without it"
+#error "ZZ9K_FB_NC: hat_cm_fb_add is not in the DDI; the module asks for the class with DDI_FB_REGISTER"
 #endif
 #ifndef ZZ9K_MONSW
 #error "the module depends on the monsw module (depend=monsw): build it with -DZZ9K_MONSW"
@@ -53,7 +54,12 @@
 #endif
 #endif
 
-#define ZZ9K_MAXBOARDS 1
+/*
+ * Units: minor 0 (/dev/zz9000) and 1, each a board with its own state, so a Z3660 and a
+ * ZZ9000 card can serve together; minor ZZ9K_MINOR_INFO + unit is the unit's information
+ * node.  The kernel console and the blitter-in-use guard are the driver's, one of each.
+ */
+#define ZZ9K_MAXBOARDS 2
 #define ZZ9K_UNIT(dev)    (getminor(dev) & ~ZZ9K_MINOR_INFO)
 #define ZZ9K_ISINFO(dev)  (getminor(dev) & ZZ9K_MINOR_INFO)
 
@@ -144,8 +150,14 @@ struct zz9k_board {
     unsigned short reg_hi;        /* SETREG HI-lane latch on a 32-bit row */
     short monsw_handle;           /* monsw registration, -1 = none */
     short svga_switch;            /* last SVGAIOCSetMonitorSwitch: 1 Amiga, 2 SVGA */
+    short capture;                /* the card shows: 1 native video (capture), 0 RTG, -1 not known */
+    unsigned long pan;            /* the RTG pan the driver last wrote */
     unsigned long blitreg[ZZ9K_NREG];  /* blitter registers as last written */
     unsigned long blitvalid;      /* bit r: blitreg[r] is what the card holds */
+    char *kregs;                  /* a mapped window: the register page's mapping */
+    unsigned long kregslen;
+    char *kfb;                    /* ... and the framebuffer part's */
+    unsigned long kfblen;
 };
 
 /*
@@ -213,7 +225,10 @@ extern int hat_cm_fb_add();
  * X servers' rtg/ layer issues on its own device at screen init and at exit; (c) calls
  * monsw_lastclose() on its last close, so a server that dies leaves the monitor on the native
  * video.  Built with -DZZ9K_MONSW, i.e. only for kernels that link monsw; without it the
- * ioctls are answered but switch nothing (the r13 lineage keeps startx-rtg's fallback).
+ * ioctls are answered but switch no monitor line (the r13 lineage keeps startx-rtg's fallback).
+ * A card with its own capture path (the ZZ9000's pass-through, one monitor on the card) is
+ * switched as well, in every build: Set SVGA to RTG, Set Amiga to native video; and, with
+ * monsw, its last close returns it to native video.  The Z3660 has no capture path.
  */
 #ifdef ZZ9K_MONSW
 #include <sys/monsw.h>
@@ -471,6 +486,19 @@ static struct zz9k_sensreg zz9k_sens_z3660[ZZ9K_SENS_N] = {
  * needed.  -DZZ9K_NO_BLITTER builds the Z3660 rows without it (the CPU loops,
  * as before); -DZZ9K_BENCH_BLIT gives it to the ZZ9000 rows, a bench aid for
  * amiberry's emulated blitter, not a statement about the real ZZ9000.
+ *
+ * The ZZ9000's firmware is synchronous in the same way: a register write below
+ * the card's 0x2000 is held (no DTACK) until the ARM acknowledges it
+ * (mntzorro.v Z2_WRITE_FINALIZE/Z3_WRITE_FINALIZE wait for REG0 bit 31), and the
+ * ARM acknowledges only after the register's case has run, FILLRECT and
+ * COPYRECT included (ZZ9000OS main.c, the ack after the write switch).  The
+ * ZZ9000 rows still leave the blitter off: no run on a real card has shown its
+ * fills and copies coherent with the CPU's own framebuffer accesses (the ARM
+ * draws through its cache, the Zorro side reads DDR directly) or measured how
+ * long a band holds the bus on a 68030.  Before ZZ9K_BENCH_BLIT becomes the
+ * default, the emulator rows (zz9000z2 and zz9000, both lines: zz9k_test's
+ * fill/copy page and an X session with the card blitter) and one real card
+ * must pass.
  */
 #ifdef ZZ9K_NO_BLITTER
 #define ZZ9K_BT_BLIT_Z3660     0
@@ -510,40 +538,15 @@ int zz9k_fixed_on = 1;
 int zz9k_fixed_on = 0;
 #endif
 
+/*
+ * The rows in unit order: the probe fills /dev/zz9000 (unit 0) first, then unit 1, walking
+ * the rows from the top.  The Z3660's onboard RTG comes first, so a machine with a Z3660
+ * and a ZZ9000 card keeps the Z3660 on unit 0, as when it was the only board; the ZZ9000
+ * then is unit 1.  A row with ZZ9K_BT_UNIQUE is a board a machine has once (the Z3660 is
+ * the accelerator itself): when one such board is attached, later rows of the same board
+ * are not probed (the fixed base is not read for a Z3660 found through AutoConfig).
+ */
 static struct zz9k_boardtab zz9k_boardtab[] = {
-    { "Zorro II board", "",
-      ZZ9K_PRODUCT_PC_Z2, 0, 0,
-      ZZ9K_FB_OFFSET, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
-      2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
-      ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
-      ZZ9K_FW_VER_MIN, 0, 2, ZZ9K_PRODUCT_Z2, ZZ9K_BT_BLIT_ZZ9000,
-      zz9k_regwin_zz9000, 0 },
-#ifndef ZZ9K_BENCH_Z3
-    { "Zorro III product", "configure card as Zorro II product 3 for AMIX",
-      ZZ9K_PRODUCT_PC_Z3, 0, 0,
-      ZZ9K_FB_OFFSET, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
-      2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
-      ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
-      ZZ9K_FW_VER_MIN, 0, 3, ZZ9K_PRODUCT_Z3, ZZ9K_BT_REJECT,
-      zz9k_regwin_zz9000, 0 }
-#else
-    /*
-     * Bench aid, not a supported configuration: amiberry can place its
-     * ZZ9000 Zorro III model inside the identity map (z3mapping=uae puts
-     * it at 0x10000000), which rehearses a 32-bit window before the Z3660
-     * stand-in exists.  Replaces the product 4 rejection above; same
-     * register file and layout as the Zorro II row, framebuffer capped so
-     * the mapping stays small.  The probe still refuses a product 4 that
-     * lies outside the identity map.
-     */
-    { "Zorro III board (bench)", "",
-      ZZ9K_PRODUCT_PC_Z3, 0, 0,
-      ZZ9K_FB_OFFSET, ZZ9K_FB_OFFSET, ZZ9K_Z3660_FB_MAX, 0, ZZ9K_REG_SIZE,
-      2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
-      ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
-      ZZ9K_FW_VER_MIN, 0, 3, ZZ9K_PRODUCT_Z3, ZZ9K_BT_BLIT_ZZ9000,
-      zz9k_regwin_zz9000, 0 }
-#endif /* ZZ9K_BENCH_Z3 */
 #ifdef ZZ9K_TARGET_Z3660
     /*
      * The combo board as the AutoConfig table lists it.  On real hardware
@@ -557,15 +560,15 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
      * Measured on an A4000 + Z3660, 2026-09-18: rejecting on the entry
      * alone refused a board the kernel can use.
      */
-  , { "Z3660 RTG", "set autoconfig_rtg NO for AMIX",
+    { "Z3660 RTG", "set autoconfig_rtg NO for AMIX",
       ZZ9K_Z3660_PRODUCT_PC, 0, 0,
       0, ZZ9K_Z3660_FB_PHYS, ZZ9K_Z3660_FB_MAX, 0,
       ZZ9K_Z3660_REG_SIZE,
       4, zz9k_regoff_z3660, zz9k_modes_z3660,
       ZZ9K_Z3660_CON_W, ZZ9K_Z3660_CON_H,
-      ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, 1,
-      ZZ9K_BT_NOCAPTURE | ZZ9K_BT_BLIT_Z3660, zz9k_regwin_z3660,
-      zz9k_sens_z3660 ZZ9K_ROW_SVC_Z3660 }
+      ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, ZZ9K_PRODUCT_Z3660,
+      ZZ9K_BT_NOCAPTURE | ZZ9K_BT_BLIT_Z3660 | ZZ9K_BT_UNIQUE, zz9k_regwin_z3660,
+      zz9k_sens_z3660 ZZ9K_ROW_SVC_Z3660 },
     /*
      * The same board reached by its fixed base, for a machine whose
      * AutoConfig table does not list it.  Device space is the framebuffer
@@ -573,16 +576,51 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
      * ethernet driver's doorbells, so it is never mapped to userland;
      * registers are reached through GETREG/SETREG only.
      */
-  , { "Z3660 RTG (fixed base)", "",
+    { "Z3660 RTG (fixed base)", "",
       0, ZZ9K_Z3660_BASE, ZZ9K_Z3660_WINDOW,
       0, ZZ9K_Z3660_FB_PHYS, ZZ9K_Z3660_FB_MAX, 0,
       ZZ9K_Z3660_REG_SIZE,
       4, zz9k_regoff_z3660, zz9k_modes_z3660,
       ZZ9K_Z3660_CON_W, ZZ9K_Z3660_CON_H,
-      ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, 1,
-      ZZ9K_BT_AGAGATE | ZZ9K_BT_NOCAPTURE | ZZ9K_BT_BLIT_Z3660,
-      zz9k_regwin_z3660, zz9k_sens_z3660 ZZ9K_ROW_SVC_Z3660 }
+      ZZ9K_Z3660_FW_MIN, ZZ9K_Z3660_FW_MAJOR, 3, ZZ9K_PRODUCT_Z3660,
+      ZZ9K_BT_AGAGATE | ZZ9K_BT_NOCAPTURE | ZZ9K_BT_BLIT_Z3660 | ZZ9K_BT_UNIQUE,
+      zz9k_regwin_z3660, zz9k_sens_z3660 ZZ9K_ROW_SVC_Z3660 },
 #endif /* ZZ9K_TARGET_Z3660 */
+    /*
+     * Device space is the framebuffer alone (fb_offset 0, physically at +0x10000): the
+     * register page below it also holds the firmware-update, SD, USB, ethernet and
+     * video-timing registers (zz_regs.h 0x80-0xFE), so it is never mapped or read through
+     * the device; GETREG/SETREG reach the row's own registers only.
+     */
+    { "Zorro II board", "",
+      ZZ9K_PRODUCT_PC_Z2, 0, 0,
+      0, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
+      2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
+      ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
+      ZZ9K_FW_VER_MIN, 0, 2, ZZ9K_PRODUCT_Z2, ZZ9K_BT_BLIT_ZZ9000 | ZZ9K_BT_CONFIT,
+      zz9k_regwin_zz9000, 0 },
+    /*
+     * The Zorro III form: the same register file at the same offsets, reached with 16-bit
+     * accesses only -- the firmware takes one 16-bit half of a register longword per write
+     * (ZZ9000OS main.c, the Z3 conversion: DS3+DS2 the high half, DS1+DS0 the low half at
+     * +2, anything else cancelled), so a 32-bit value goes as HI then LO (zz9k_wr32).  The
+     * framebuffer at +0x10000 as on Zorro II (the board window maps to the card's DDR at
+     * board offset + 0x1F0000, memorymap.h ADDR_ADJ), and of the 128 MB window (64 MB on the
+     * FW20 variant, mntzorro.v) the part P96 owns, ARM 0x200000-0x33EFFFF (memorymap.h
+     * Z3_P96_VRAM_ADDRESS..Z3_P96_VRAM_END): above it the firmware keeps its host-visible
+     * heap, GFXData and template scratch, the SDK mailbox and host windows and the audio
+     * rings at the top of the window.  Device space is that framebuffer alone.  Inside the
+     * identity map (amiberry's z3mapping=uae, at 0x10000000) it is reached directly;
+     * above it (every real Zorro III slot, from 0x40000000) through the kernel mappings of
+     * the register page and the start of the framebuffer (zz9k_attach_mapped).
+     */
+    { "Zorro III board", "this kernel cannot map a board above 1 GB: configure the card as Zorro II",
+      ZZ9K_PRODUCT_PC_Z3, 0, 0,
+      0, ZZ9K_FB_OFFSET, ZZ9K_Z3_FB_MAX, 0, ZZ9K_REG_SIZE,
+      2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
+      ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
+      ZZ9K_FW_VER_MIN, 0, 3, ZZ9K_PRODUCT_Z3, ZZ9K_BT_BLIT_ZZ9000 | ZZ9K_BT_CONFIT,
+      zz9k_regwin_zz9000, 0 }
 };
 
 #define ZZ9K_NBOARDTAB (sizeof zz9k_boardtab / sizeof zz9k_boardtab[0])
@@ -705,6 +743,23 @@ struct zz9k_board *bp;
 
 
 /*
+ * The framebuffer's bytes on a board of size bytes: the row's fixed size (fb_max) when the
+ * window holds it, else what the window holds above fb_phys, less the row's reserved tail.
+ */
+static unsigned long
+zz9k_fbsize(bt, size)
+struct zz9k_boardtab *bt;
+unsigned long size;
+{
+    unsigned long room;
+
+    room = size > bt->fb_phys + bt->reserved_tail ? size - bt->fb_phys - bt->reserved_tail : 0;
+    if (bt->fb_max && bt->fb_max <= room)
+        return bt->fb_max;
+    return room;
+}
+
+/*
  * Attach the row's board at physical base.  kregs and kfb are the kernel's addresses of the
  * register page and the framebuffer when the window is mapped (kfblen bytes of it), or 0
  * when it lies in the identity map and the physical address is the kernel's.
@@ -734,16 +789,13 @@ unsigned long kfblen;
     bp->phys = base;
     bp->mapped = kregs != 0;
 
-    if (bt->fb_max) {
-        bp->fb_size = bt->fb_max;
-        bp->board_size = bt->fb_offset + bp->fb_size;
-    } else {
-        bp->board_size = (unsigned long)size;
-        if (bp->board_size > bt->fb_offset + bt->reserved_tail)
-            bp->fb_size = bp->board_size - bt->fb_offset - bt->reserved_tail;
-        else
-            bp->fb_size = 0;
-    }
+    /*
+     * board_size is the device space: fb_offset (0 on every row) and the framebuffer,
+     * what read(2), write(2) and mmap(2) reach and what GETINFO reports, so a client may
+     * map board_size bytes from offset 0.
+     */
+    bp->fb_size = zz9k_fbsize(bt, (unsigned long)size);
+    bp->board_size = bt->fb_offset + bp->fb_size;
     bp->fb = (char *)base + bt->fb_phys;
     bp->fb_kmap = bp->fb_size;
     if (kregs) {
@@ -815,7 +867,13 @@ extern void dev_kvunmap();
 #else
 extern char *sptalloc();
 extern void sptfree();
-#define ZZ9K_KVFB_DEFAULT  2        /* MiB, of the 4 MiB pool other drivers share */
+/*
+ * MiB, of the 4 MiB pool (sptmap) page[], the u-areas and other drivers draw on too: a
+ * ZZ9000's 1920x800 console needs 3 (kvfb=3) and otherwise takes a smaller mode
+ * (zz9k_con_fit).  A larger request halves until sptalloc finds the room; it never
+ * reaches past the pool.
+ */
+#define ZZ9K_KVFB_DEFAULT  2
 #endif
 #define ZZ9K_KVFB_MIN      1
 #define ZZ9K_KVFB_LIMIT    46
@@ -851,18 +909,14 @@ unsigned long len;
 }
 
 /* the board's mapped parts: released at unload or when the attach fails */
-static char *zz9k_kregs;
-static unsigned long zz9k_kregslen;
-static char *zz9k_kfb;
-static unsigned long zz9k_kfblen;
-
 static void
-zz9k_unmap_all()
+zz9k_unmap_all(bp)
+struct zz9k_board *bp;
 {
-    zz9k_unmap(zz9k_kfb, zz9k_kfblen);
-    zz9k_unmap(zz9k_kregs, zz9k_kregslen);
-    zz9k_kfb = zz9k_kregs = (char *)0;
-    zz9k_kfblen = zz9k_kregslen = 0;
+    zz9k_unmap(bp->kfb, bp->kfblen);
+    zz9k_unmap(bp->kregs, bp->kregslen);
+    bp->kfb = bp->kregs = (char *)0;
+    bp->kfblen = bp->kregslen = 0;
 }
 
 static int
@@ -877,10 +931,12 @@ long size;
 
     if (bt->fb_offset != 0 || bt->reg_size == 0)
         return 0;
-    fbsize = bt->fb_max ? bt->fb_max : (unsigned long)size - bt->fb_phys - bt->reserved_tail;
-    zz9k_kregs = zz9k_map((unsigned long)base, bt->reg_size, ZZ9K_CM_NCS);
-    zz9k_kregslen = bt->reg_size;
-    if (!zz9k_kregs) {
+    fbsize = zz9k_fbsize(bt, (unsigned long)size);
+    if (fbsize == 0)
+        return 0;
+    bp->kregs = zz9k_map((unsigned long)base, bt->reg_size, ZZ9K_CM_NCS);
+    bp->kregslen = bt->reg_size;
+    if (!bp->kregs) {
         printf("zz9000: %s at 0x%x: cannot map its register page\n", bt->name,
             (unsigned int)base);
         return 0;
@@ -893,21 +949,21 @@ long size;
         want = (unsigned long)mib * ZZ9K_MIB;
         if (want > fbsize)
             want = fbsize;
-        zz9k_kfb = zz9k_map((unsigned long)base + bt->fb_phys, want, ZZ9K_CM_NC);
-        if (zz9k_kfb) {
-            zz9k_kfblen = want;
+        bp->kfb = zz9k_map((unsigned long)base + bt->fb_phys, want, ZZ9K_CM_NC);
+        if (bp->kfb) {
+            bp->kfblen = want;
             break;
         }
     }
-    if (!zz9k_kfb) {
+    if (!bp->kfb) {
         printf("zz9000: %s at 0x%x: cannot map its framebuffer\n", bt->name,
             (unsigned int)base);
-        zz9k_unmap_all();
+        zz9k_unmap_all(bp);
         return 0;
     }
-    if (zz9k_attach_at(bp, bt, base, size, zz9k_kregs, zz9k_kfb, zz9k_kfblen))
+    if (zz9k_attach_at(bp, bt, base, size, bp->kregs, bp->kfb, bp->kfblen))
         return 1;
-    zz9k_unmap_all();
+    zz9k_unmap_all(bp);
     return 0;
 }
 #endif /* ZZ9K_DEV_KVMAP || ZZ9K_SPT_MAP */
@@ -947,28 +1003,112 @@ zz9k_aga()
     return ((v >> 8) & 0x7f) >= 0x22;
 }
 
+/* A unit holds the board at physical base. */
 static int
-zz9k_probe(unit)
-int unit;
+zz9k_held(base)
+long base;
+{
+    int u;
+
+    for (u = 0; u < ZZ9K_MAXBOARDS; ++u)
+        if (zz9k_boards[u].base && zz9k_boards[u].phys == base)
+            return 1;
+    return 0;
+}
+
+/* A unit holds a board of a ZZ9K_BT_UNIQUE row that is the board of row bt. */
+static int
+zz9k_unique_held(bt)
+struct zz9k_boardtab *bt;
+{
+    struct zz9k_boardtab *t;
+    int u;
+
+    for (u = 0; u < ZZ9K_MAXBOARDS; ++u) {
+        t = zz9k_boards[u].bt;
+        if (zz9k_boards[u].base && t && (t->flags & ZZ9K_BT_UNIQUE) &&
+            t->product == bt->product && t->zorro == bt->zorro && t->regoff == bt->regoff)
+            return 1;
+    }
+    return 0;
+}
+
+/* The lowest unit without a board, or 0. */
+static struct zz9k_board *
+zz9k_free_unit()
+{
+    int u;
+
+    for (u = 0; u < ZZ9K_MAXBOARDS; ++u)
+        if (!zz9k_boards[u].base)
+            return &zz9k_boards[u];
+    return (struct zz9k_board *)0;
+}
+
+/*
+ * Attach row bt's board at base into the lowest free unit.  Kernel code dereferences the
+ * window directly when it lies inside the identity-mapped low 1 GB; above it the window
+ * is mapped (a build with mappings, a row whose device space is the framebuffer alone) or
+ * refused with the row's advice.  A refused window, or a board that does not answer, leaves
+ * the next row its turn: the same board may be reachable by another route.
+ */
+static int
+zz9k_try(bt, base, size)
+struct zz9k_boardtab *bt;
+long base, size;
+{
+    struct zz9k_board *bp;
+
+    bp = zz9k_free_unit();
+    if (!bp)
+        return 0;
+    if ((unsigned long)base >= ZZ9K_VSECT1 ||
+        ZZ9K_VSECT1 - (unsigned long)base < (unsigned long)size) {
+#ifdef ZZ9K_CAN_MAP
+        if (bt->fb_offset == 0)
+            return zz9k_attach_mapped(bp, bt, base, size);
+#endif
+        printf("zz9000: %s at 0x%x size 0x%x is outside the identity map\n",
+            bt->name, (unsigned int)base, (unsigned int)size);
+        if (bt->advice[0])
+            printf("zz9000: %s\n", bt->advice);
+        return 0;
+    }
+    return zz9k_attach(bp, bt, base, size);
+}
+
+/*
+ * One walk of the board table, in unit order, attaching every board not held yet into the
+ * free units: each AutoConfig entry of a row's identity (two cards of one kind each get a
+ * unit), then the fixed-base rows.  A board already held -- the Z3660 listed in AutoConfig
+ * and reached at its fixed base too -- is not probed again.
+ */
+static void
+zz9k_scan()
 {
     long base, size;
-    int i;
-    struct zz9k_board *bp;
+    int i, inst;
     struct zz9k_boardtab *bt;
-
-    if (unit >= ZZ9K_MAXBOARDS)
-        return 0;
-
-    bp = &zz9k_boards[unit];
-    if (bp->base)
-        return 1;
-    if (zz9k_noboard[unit])             /* boards do not appear later: no second walk */
-        return 0;
 
     for (i = 0; i < ZZ9K_NBOARDTAB; ++i) {
         bt = &zz9k_boardtab[i];
-        if (bt->autocon_pc) {
-            if (!autocon(bt->autocon_pc, unit, &base, &size))
+        if ((bt->flags & ZZ9K_BT_UNIQUE) && zz9k_unique_held(bt))
+            continue;
+        if (!bt->autocon_pc) {
+            if (!zz9k_fixed_on || !zz9k_free_unit())
+                continue;
+            if ((bt->flags & ZZ9K_BT_AGAGATE) && !zz9k_aga())
+                continue;
+            base = (long)bt->fixed_base;
+            size = (long)bt->fixed_size;
+            if (!zz9k_held(base))
+                (void)zz9k_try(bt, base, size);
+            continue;
+        }
+        for (inst = 0; inst < ZZ9K_MAX_AUTOCON && zz9k_free_unit(); ++inst) {
+            if (!autocon(bt->autocon_pc, inst, &base, &size))
+                break;
+            if (zz9k_held(base))
                 continue;
             if (bt->flags & ZZ9K_BT_REJECT) {
                 printf("zz9000: %s at 0x%x size 0x%x unsupported\n",
@@ -979,43 +1119,39 @@ int unit;
             printf("zz9000: autocon match pc 0x%x base 0x%x size 0x%x\n",
                 (unsigned int)bt->autocon_pc, (unsigned int)base,
                 (unsigned int)size);
-        } else {
-            if (!zz9k_fixed_on)
-                continue;
-            if ((bt->flags & ZZ9K_BT_AGAGATE) && !zz9k_aga())
-                continue;
-            base = (long)bt->fixed_base;
-            size = (long)bt->fixed_size;
+            if (zz9k_try(bt, base, size) && (bt->flags & ZZ9K_BT_UNIQUE))
+                break;
         }
-        /*
-         * Kernel code dereferences the window directly: it must lie
-         * inside the identity-mapped low 1 GB.  A window that does not,
-         * or a board that does not answer, leaves the next row its turn:
-         * the same board may be reachable by another route.
-         */
-        if ((unsigned long)base >= ZZ9K_VSECT1 ||
-            ZZ9K_VSECT1 - (unsigned long)base < (unsigned long)size) {
-#ifdef ZZ9K_CAN_MAP
-            if (bt->fb_offset == 0) {
-                if (zz9k_attach_mapped(bp, bt, base, size))
-                    return 1;
-                continue;
-            }
-#endif
-            printf("zz9000: %s at 0x%x size 0x%x is outside the identity map\n",
-                bt->name, (unsigned int)base, (unsigned int)size);
-            if (bt->advice[0])
-                printf("zz9000: %s\n", bt->advice);
-            continue;
-        }
-        if (zz9k_attach(bp, bt, base, size))
-            return 1;
-        /* attach() said what it saw; a later row may still find it */
     }
+}
 
-    printf("zz9000: no supported board found\n");
-    zz9k_noboard[unit] = 1;
-    return 0;
+/*
+ * The unit's board, looking for boards when it has none: one walk fills every free unit,
+ * and a unit the walk leaves empty is not looked for again (boards do not appear later).
+ */
+static int
+zz9k_probe(unit)
+int unit;
+{
+    int u, any;
+
+    if (unit < 0 || unit >= ZZ9K_MAXBOARDS)
+        return 0;
+    if (zz9k_boards[unit].base)
+        return 1;
+    if (zz9k_noboard[unit])
+        return 0;
+    zz9k_scan();
+    for (u = 0, any = 0; u < ZZ9K_MAXBOARDS; ++u) {
+        if (zz9k_boards[u].base) {
+            zz9k_noboard[u] = 0;
+            any = 1;
+        } else
+            zz9k_noboard[u] = 1;
+    }
+    if (!any)
+        printf("zz9000: no supported board found\n");
+    return zz9k_boards[unit].base != 0;
 }
 
 /*
@@ -1102,9 +1238,10 @@ unsigned long value;
 }
 
 /*
- * Device space as seen through read/write/mmap: [0, fb_offset) is the
- * register block, [fb_offset, board_size) the framebuffer.  On a row whose
- * framebuffer is not contiguous with its registers the two are joined here.
+ * Device space as seen through read/write/mmap: [0, fb_offset) would be a
+ * register block and [fb_offset, board_size) is the framebuffer.  Every row
+ * has fb_offset 0: the device is the framebuffer alone, wherever it lies in
+ * the board's window (fb_phys).
  */
 static char *
 zz9k_devphys(bp, off)
@@ -1138,15 +1275,17 @@ unsigned short color;
 
     zz9k_bwr32(bp, ZZ9K_R_DST, 0);
     /*
-     * The Z3660 firmware byte-reverses the RGB register (rtg.c REG_ZZ_RGB:
-     * rect_rgb = swap32 of the value written) and a 16-bit fill takes the low
-     * half of that (gfx.c fill_rect_solid), i.e. the high half as written: a
-     * colour in the low half fills with 0 (measured on the bench, 2026-09-29).
+     * A 16-bit fill colour goes in the high half of RGB on both firmwares.  The Z3660's
+     * byte-reverses the 32-bit RGB register (rtg.c REG_ZZ_RGB: rect_rgb = swap32 of the
+     * value written) and a 16-bit fill takes the low half of that (gfx.c fill_rect_solid),
+     * i.e. the high half as written: a colour in the low half fills with 0 (measured on
+     * the bench, 2026-09-29).  The ZZ9000's takes RGB as two 16-bit registers and puts
+     * RGB_HI (0x1E), byte-swapped, in rect_rgb's low half and RGB_LO (0x20) in its high
+     * half (ZZ9000OS main.c REG_ZZ_RGB_HI/LO); fill_rect_solid stores that low half with
+     * memset16 into the little-endian framebuffer (gfx.c), which the Amiga reads back as
+     * the value written to RGB_HI.  So wr32's HI write carries the colour, its LO write 0.
      */
-    if (bp->bt->regw == 4)
-        zz9k_bwr32(bp, ZZ9K_R_RGB, (unsigned long)color << 16);
-    else
-        zz9k_bwr32(bp, ZZ9K_R_RGB, (unsigned long)color);
+    zz9k_bwr32(bp, ZZ9K_R_RGB, (unsigned long)color << 16);
     zz9k_bwr(bp, ZZ9K_R_ROW_PITCH,
         (unsigned long)((bp->width * zz9k_bpp(bp->color_mode)) >> 2));
     /* the copy's value: FILLRECT ignores COLORMODE's mask byte, so fills and copies
@@ -1404,6 +1543,7 @@ unsigned long off;
     zz9k_bwr(bp, ZZ9K_R_X2, (unsigned long)bp->width);
     zz9k_bwr(bp, ZZ9K_R_COLORMODE, (unsigned long)(bp->color_mode | ZZ9K_COLORMODE_MASK));
     zz9k_wr32(bp, ZZ9K_R_PAN, off);
+    bp->pan = off;
     --zz9k_blit_inuse;
 }
 
@@ -1429,10 +1569,21 @@ unsigned short scale_mode;
         (unsigned long)(mode | (color_mode << 8) | (scale_mode << 12)));
     bp->mode = mode;
     bp->color_mode = color_mode;
+    bp->pan = 0;
     ZZ9K_BLIT_FORGET(bp);
     --zz9k_blit_inuse;
 }
 
+/*
+ * The card's own output switch, on a row with a capture path (the ZZ9000: the FPGA's
+ * videocap_mode_in, register 0x1006, mntzorro.v REGWRITE 'h06).  To native video: the
+ * capture area's legacy pan, then capture on -- firmware that derives the capture origin
+ * itself ignores that pan value (main.c REG_ZZ_PAN_LO, VIDEOCAP_NATIVE_PAN_LEGACY_BASE), and
+ * older firmware took it as the pan.  To RTG: capture off, then the RTG pan written again
+ * through zz9k_set_pan, for the firmware that took the capture pan as its own; not from
+ * inside a blitter operation, whose X1/Y1/X2 the pan would disturb (the pan then waits
+ * for the next mode or pan).  A row without capture (the Z3660) has nothing to switch.
+ */
 static void
 zz9k_set_switch_hw(bp, enabled)
 struct zz9k_board *bp;
@@ -1443,10 +1594,22 @@ unsigned short enabled;
     if (enabled == ZZ9K_SWITCH_CAPTURE) {
         zz9k_wr32(bp, ZZ9K_R_PAN, ZZ9K_CAPTURE_PAN);
         zz9k_wr(bp, ZZ9K_R_CAPTURE, 1);
+        bp->capture = 1;
     } else {
         zz9k_wr(bp, ZZ9K_R_CAPTURE, 0);
-        zz9k_wr32(bp, ZZ9K_R_PAN, 0);
+        if (!zz9k_blit_inuse)
+            zz9k_set_pan(bp, bp->pan);
+        bp->capture = 0;
     }
+}
+
+/* The console's way back to RTG, at every write: only when the card is not on RTG already. */
+static void
+zz9k_rtg_on(bp)
+struct zz9k_board *bp;
+{
+    if (bp->capture != 0)
+        zz9k_set_switch_hw(bp, ZZ9K_SWITCH_RTG);
 }
 
 /*
@@ -1461,6 +1624,8 @@ struct zz9k_board *bp;
     bp->monsw_handle = -1;
     ZZ9K_BLIT_FORGET(bp);
     bp->svga_switch = 1;
+    bp->capture = -1;                   /* AmigaOS may have left the card on either */
+    bp->pan = 0;
 #ifdef ZZ9K_MONSW
     {
         unsigned long v;
@@ -2188,6 +2353,40 @@ unsigned char c;
     zz9k_console_cursor(1);
 }
 
+/*
+ * A row with ZZ9K_BT_CONFIT whose console mode does not fit the part of the framebuffer the
+ * kernel maps (a board above the identity map on the 68030 line: kvfb MiB of a 4 MiB pool
+ * the whole kernel shares) takes the largest mode of its table that does, and says so; the
+ * console never draws past that part.  ZZ9K_NOMODE, and why, when none fits.
+ */
+static unsigned short
+zz9k_con_fit(bp)
+struct zz9k_board *bp;
+{
+    struct zz9k_modetab *m, *best;
+    unsigned long need, a;
+
+    need = (unsigned long)bp->bt->con_width * bp->bt->con_height * 2;
+    best = (struct zz9k_modetab *)0;
+    for (m = bp->bt->modes; m->width; ++m) {
+        a = (unsigned long)m->width * m->height;
+        if (a * 2 <= bp->fb_kmap &&
+            (!best || a > (unsigned long)best->width * best->height))
+            best = m;
+    }
+    if (!best) {
+        printf("zz9000: no console mode fits the 0x%x bytes of the framebuffer the kernel maps\n",
+            (unsigned int)bp->fb_kmap);
+        return ZZ9K_NOMODE;
+    }
+    printf("zz9000: console %dx%d needs 0x%x bytes, the kernel maps 0x%x (kvfb=%d for it): %dx%d\n",
+        bp->bt->con_width, bp->bt->con_height, (unsigned int)need, (unsigned int)bp->fb_kmap,
+        (int)((need + 0xfffffUL) >> 20), best->width, best->height);
+    zz9k_con_w = best->width;
+    zz9k_con_h = best->height;
+    return best->id;
+}
+
 static int
 zz9k_console_start(bp)
 struct zz9k_board *bp;
@@ -2201,8 +2400,13 @@ struct zz9k_board *bp;
         return EINVAL;
     zz9k_con_w = bp->bt->con_width;
     zz9k_con_h = bp->bt->con_height;
-    if ((unsigned long)zz9k_con_w * zz9k_con_h * 2 > bp->fb_kmap)
-        return ENOMEM;
+    if ((unsigned long)zz9k_con_w * zz9k_con_h * 2 > bp->fb_kmap) {
+        if (!(bp->bt->flags & ZZ9K_BT_CONFIT))
+            return ENOMEM;
+        id = zz9k_con_fit(bp);
+        if (id == ZZ9K_NOMODE)
+            return ENOMEM;
+    }
 
     zz9k_set_mode_hw(bp, id, ZZ9K_CON_COLOR, 0);
     bp->width = zz9k_con_w;
@@ -2438,7 +2642,7 @@ unsigned n;
         return 1;
     }
     if (zz9k_console_bp) {
-        zz9k_set_switch_hw(zz9k_console_bp, ZZ9K_SWITCH_RTG);
+        zz9k_rtg_on(zz9k_console_bp);
         ZZ9K_MONSW_SET(1);
     }
     while (n--)
@@ -2575,11 +2779,18 @@ struct cred *cr;
      * unless the kernel console is redirected to this board.
      */
 #ifdef ZZ9K_MONSW
-    if (unit < ZZ9K_MAXBOARDS && zz9k_boards[unit].monsw_handle >= 0 &&
+    if (unit < ZZ9K_MAXBOARDS && zz9k_boards[unit].base && zz9k_boards[unit].monsw_handle >= 0 &&
         !(zz9k_console_redirect && zz9k_console_bp == &zz9k_boards[unit])) {
         monsw_lastclose(zz9k_boards[unit].monsw_handle);
         zz9k_boards[unit].svga_switch = SVGAMONITORSWITCH_Amiga;   /* what Get answers now */
     }
+    /*
+     * A card with its own capture path (the ZZ9000, one monitor on its output) shows the
+     * Amiga picture again; a row without one (the Z3660) is not touched.
+     */
+    if (unit < ZZ9K_MAXBOARDS && zz9k_boards[unit].base &&
+        !(zz9k_console_redirect && zz9k_console_bp == &zz9k_boards[unit]))
+        zz9k_set_switch_hw(&zz9k_boards[unit], ZZ9K_SWITCH_CAPTURE);
 #endif
     /* the client that paused the console is gone: the console takes the screen back */
     if (unit < ZZ9K_MAXBOARDS && zz9k_console_redirect && zz9k_console_paused &&
@@ -2624,7 +2835,7 @@ struct cred *cr;
         count = limit - (unsigned long)uiop->uio_offset;
     if (direction == UIO_WRITE && count == 0)
         return ENXIO;
-    /* the register block, as GETREG/SETREG, is privileged; the framebuffer is not */
+    /* a register block (no row has one: fb_offset 0) would be privileged, as GETREG/SETREG */
     if ((unsigned long)uiop->uio_offset < bp->bt->fb_offset && drv_priv(cr))
         return EPERM;
 
@@ -2676,6 +2887,9 @@ int maxprot;
         return -1;
     bp = &zz9k_boards[unit];
     if (offset < 0 || (unsigned long)offset >= bp->board_size)
+        return -1;
+    /* never the register page, whatever a row says: GETREG/SETREG reach it */
+    if ((unsigned long)offset < bp->bt->fb_offset)
         return -1;
 
     return phystopfn(zz9k_devpa(bp, (unsigned long)offset));
@@ -2974,6 +3188,10 @@ int *rvalp;
             return EINVAL;
         bp->svga_switch = (short)sw;
         ZZ9K_MONSW_SET(sw == SVGAMONITORSWITCH_SVGA);
+        /* a card with its own capture path switches its output too (not the Z3660) */
+        if (bp->base)
+            zz9k_set_switch_hw(bp, sw == SVGAMONITORSWITCH_SVGA ?
+                ZZ9K_SWITCH_RTG : ZZ9K_SWITCH_CAPTURE);
         return 0;
     }
     if (cmd == ZZ9KIOC_BLITS)           /* outside the switch for the same reason */
@@ -3231,6 +3449,24 @@ static int zz9000_load();
 static int zz9000_unload();
 static void zz9000_halt();
 
+/*
+ * The framebuffer's cache class on k46 (contract C3-6 section 5): the kit's
+ * DDI_FB_REGISTER, a weak reference to the core's fb_register (k46.1.6), puts unit 0's
+ * framebuffer window -- never its register page -- in the non-cacheable, not serialised
+ * class, so the CPU's stores to it drain through the 68060's store buffer instead of
+ * waiting one by one.  The module's kabi tag does not rise: on a kernel without
+ * fb_register, and on k30, whose 68030 has no such class, the call gives ENOSYS and the
+ * framebuffer keeps the default class.  A refusal (a window outside any AutoConfig entry,
+ * as the Z3660's fixed base under an emulator, or both slots held) is reported by the core
+ * on one console line and is not fatal.  Unit 1 keeps the default class, leaving the
+ * kernel's second slot to another board's driver.  A kit before k46.1.6 has no macro.
+ */
+#ifndef DDI_FB_REGISTER
+#define DDI_FB_REGISTER_DECL        extern int zz9k_fbnone
+#define DDI_FB_REGISTER(pa, len)    ENOSYS
+#endif
+DDI_FB_REGISTER_DECL;
+
 struct mod_drv_data zz9000_drvdata[] = {
     { { 0 }, 0, 0,
       { zz9000open, zz9000close, zz9000read, zz9000write, zz9000ioctl, zz9000mmap },
@@ -3348,10 +3584,18 @@ static int
 zz9000_load(params)
 char *params;
 {
+    struct zz9k_board *bp;
+    int u;
+
     zz9k_params(params);
-    if (!zz9k_probe(0))
+    if (!zz9k_probe(0))                 /* every board found is attached, unit 1 too */
         return ENXIO;
-    zz9k_svc_attach(&zz9k_boards[0]);
+    bp = &zz9k_boards[0];
+    if (bp->fb_size)
+        (void)DDI_FB_REGISTER((unsigned long)bp->phys + bp->bt->fb_phys, bp->fb_size);
+    for (u = 0; u < ZZ9K_MAXBOARDS; ++u)        /* a board whose row has the service block */
+        if (zz9k_boards[u].base)
+            zz9k_svc_attach(&zz9k_boards[u]);
     return 0;
 }
 
@@ -3365,22 +3609,27 @@ static int
 zz9000_unload()
 {
     struct zz9k_board *bp;
-    int e;
+    int u, e;
 
-    bp = &zz9k_boards[0];
-    e = zz9k_svc_detach(bp);
-    if (e)
-        return e;
+    /* only a Z3660 row has the service block, and a machine has one Z3660 */
+    for (u = 0; u < ZZ9K_MAXBOARDS; ++u) {
+        e = zz9k_svc_detach(&zz9k_boards[u]);
+        if (e)
+            return e;
+    }
     if (zz9k_console_redirect)
         zz9k_console_disable();
-    if (bp->base && bp->monsw_handle >= 0) {
-        monsw_unregister(bp->monsw_handle);
-        bp->monsw_handle = -1;
-    }
+    for (u = 0; u < ZZ9K_MAXBOARDS; ++u) {
+        bp = &zz9k_boards[u];
+        if (bp->base && bp->monsw_handle >= 0) {
+            monsw_unregister(bp->monsw_handle);
+            bp->monsw_handle = -1;
+        }
 #ifdef ZZ9K_CAN_MAP
-    bp->base = 0;
-    zz9k_unmap_all();                   /* a window mapped above the identity map */
+        bp->base = 0;
+        zz9k_unmap_all(bp);             /* a window mapped above the identity map */
 #endif
+    }
     return 0;
 }
 

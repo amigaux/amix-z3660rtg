@@ -18,6 +18,12 @@ left unchanged.
 - **Next: performance.** Each card blitter operation costs about 76 µs of fixed overhead in the
   firmware path (`NOTES.md`). Whether the ZZ9000 and Z3660 targets stay one source is still
   open.
+- **Real ZZ9000 cards (1.1.2).** The same module drives an MNT ZZ9000 as a Zorro II or a
+  Zorro III board (above 1 GB through kernel mappings, on both kernel lines), beside a Z3660
+  as unit 1 (`/dev/zz9001`). The card's own pass-through returns the monitor to the Amiga
+  picture when X exits. The device is the framebuffer alone on every board. Followed from
+  the card's firmware source (ZZ9000OS 2.9.1) and the host tests; not yet run on a real card
+  or in the emulator. `module/README.md`, `module/zz9000.7`, `docs/IOCTL-ABI.md`.
 - **Known limitation:** user `mmap` of `/dev/mem` is broken on the r13 kernel lineage (the
   68040/68060 port's ISSUE-46: every mapping lands one 4 KiB page high). It does not affect
   `/dev/zz9000`, because `zz9000mmap` is a different `d_mmap`. Do not use `/dev/mem` mmap as
@@ -49,9 +55,10 @@ left unchanged.
   the magic nothing is registered and the module is the display alone. Its unload is refused
   (`EBUSY`) while zz9ksvc holds the board. GETREG and SETREG never reach the block.
 - **Module parameters** (`module/z3660rtg.keys`): `blit` (1: use the card's blitter),
-  `maxarea` (pixels per blitter band, default 8192) and `fixed` (0: find the board only
+  `maxarea` (pixels per blitter band, default 8192), `fixed` (0: find the board only
   through its AutoConfig entry, as a real Z3660 is found; 1 also tries the fixed base at
-  `0x10000000`, which amiberry's Z3660 stand-in needs). The static driver's
+  `0x10000000`, which amiberry's Z3660 stand-in needs) and `kvfb` (MiB of a framebuffer
+  above 1 GB mapped for the kernel). The static driver's
   `zz9k_blit_on`, `zz9k_blit_maxarea` and `zz9k_fixed_on` are the same knobs; a
   `-DZZ9K_BENCH_Z3660` build turns `zz9k_fixed_on` on.
 - **Kernel.** A Z3660 runs a 68040/68060 kernel from Antti Sokero's

@@ -239,10 +239,10 @@ unsigned long pc;
 int unit;
 long *basep, *sizep;
 {
-    int i;
+    int i, n;
 
-    for (i = 0; i < 4; ++i)
-        if (kboards[i].pc && kboards[i].pc == pc && unit == 0) {
+    for (i = 0, n = 0; i < 4; ++i)
+        if (kboards[i].pc && kboards[i].pc == pc && n++ == unit) {     /* the unit-th of pc */
             *basep = kboards[i].base;
             *sizep = kboards[i].size;
             return 1;

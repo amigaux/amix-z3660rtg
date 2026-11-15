@@ -1,6 +1,9 @@
 # The .moddata keys of the module form (amix-dlm C3-1 section 3, C3-6 section 3), one
 # key=value string per line as the section carries them.  The line's kabi and cc come from
 # the ABI kit, cpu too (the line's); module/Makefile turns this file into the kit's Master.
+# One object for the Z3660's onboard RTG and MNT ZZ9000 cards (Zorro II and III), two
+# units (README.md, zz9000.7).  kvfb: MiB of a board above 1 GB mapped for the kernel,
+# 0 = the line's default (8 on k46, 2 on k30; a ZZ9000's 1920x800 console needs 3 on k30).
 name=z3660rtg
 class=demand
 majors=c:49

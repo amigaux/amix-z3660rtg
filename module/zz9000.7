@@ -1,0 +1,160 @@
+.\" Copyright (c) 2026 Jussi Alanärä.  SPDX-License-Identifier: MIT
+.TH ZZ9000 7 "15 November 2026" "amix-z3660rtg" "Devices"
+.SH NAME
+zz9000 \- RTG framebuffer of the Z3660 and of MNT ZZ9000 cards
+.SH SYNOPSIS
+.B /dev/zz9000
+.br
+.B /dev/zz9000i
+.br
+.B /dev/zz9001
+.br
+.B /dev/zz9001i
+.br
+.B #include \(dqzz9000.h\(dq
+.SH DESCRIPTION
+The
+.B z3660rtg
+module drives the RTG output of the Z3660 accelerator and of MNT ZZ9000
+cards, Zorro II and Zorro III.
+It is a loadable kernel module of the demand class on character major 49:
+it loads at the first open of one of its nodes, after the
+.BR monsw (7)
+module it depends on, and finds every supported board.
+.PP
+Unit 0
+.RI ( /dev/zz9000 ,
+minor 0) is the first board, unit 1
+.RI ( /dev/zz9001 ,
+minor 1) the second.
+The Z3660's onboard RTG is always unit 0; a ZZ9000 card beside it is unit 1.
+With one board, unit 1 answers
+.BR ENXIO .
+.PP
+The device is the board's framebuffer:
+.BR read (2),
+.BR write (2)
+and
+.BR mmap (2)
+reach it from offset 0, never the board's registers.
+The X server
+.RB ( Xzz9000 )
+maps it; the ioctls of
+.I zz9000.h
+set the mode and the pan, switch the output, fill and copy rectangles, and
+run the framebuffer console.
+The registers the display uses are reached through
+.B ZZ9KIOC_GETREG
+and
+.B ZZ9KIOC_SETREG
+only, and only those; the rest of the register page (the firmware's
+ethernet, USB, SD and update registers) is refused.
+The node is mode 0660, owner root, group sys.
+.PP
+The information node
+.RI ( /dev/zz9000i ,
+minor 128;
+.IR /dev/zz9001i ,
+minor 129) is mode 0444.
+It answers
+.BR ZZ9KIOC_GETINFO ,
+.BR ZZ9KIOC_GETFBINFO ,
+.BR ZZ9KIOC_GETMODES ,
+.B ZZ9KIOC_SENSORS
+and the monitor-switch Get, and nothing else.
+.SS Which board
+.B ZZ9KIOC_GETINFO
+gives
+.B zorro
+and
+.BR product ,
+which together name the board:
+.TP 12
+.B "3 and 1"
+the Z3660's onboard RTG
+.RB ( ZZ9K_IS_Z3660 );
+.TP
+.B "2 and 3"
+a ZZ9000 card as a Zorro II board
+.RB ( ZZ9K_IS_ZZ9000_Z2 );
+.TP
+.B "3 and 4"
+a ZZ9000 card as a Zorro III board
+.RB ( ZZ9K_IS_ZZ9000_Z3 ).
+.SS The monitor
+A ZZ9000 passes the Amiga's own picture through its output, so one monitor on
+the card shows both.
+The driver switches the card to RTG when the X server asks for the RTG
+display, to the Amiga picture when it gives the display back, and to the Amiga
+picture at the last close of the node, so an X server that exits or is killed
+leaves the Amiga picture, unless the framebuffer console is shown on that
+board.
+A machine whose monitor is switched by a separate line uses
+.BR monsw (7)
+as well; the Z3660 has no pass-through and uses only that.
+.SS A board above 1 GB
+A Zorro III board lies above the kernel's identity-mapped first gigabyte.
+The module maps its register page and the start of its framebuffer for the
+kernel (the
+.B kvfb
+parameter); user
+.BR mmap (2)
+reaches the whole framebuffer.
+.BR read (2),
+.BR write (2)
+and the kernel's own drawing reach only the mapped part.
+On the 68030 line the mapping comes from a small pool the whole kernel shares:
+with the default 2 MiB a ZZ9000's framebuffer console takes 1280x720 instead
+of its 1920x800 and says so;
+.B kvfb=3
+gives it the full mode.
+.SH PARAMETERS
+Set in
+.I /etc/conf/modreg.local.d/z3660rtg
+as
+.BI "param " name = value
+lines (see
+.BR kbootset (1M)).
+.TP 10
+.B blit
+1 (the default): fills and copies use the card's blitter where the driver
+uses it (the Z3660); 0: the CPU.
+The ZZ9000's blitter is not used.
+.TP
+.B fixed
+0 (the default): the Z3660 is found through its AutoConfig entry, as on a
+real machine; 1: its fixed base at
+.B 0x10000000
+is also tried, which emulators without that entry need.
+.TP
+.B kvfb
+MiB of the framebuffer of a board above 1 GB mapped for the kernel, 1 to 46;
+0 (the default) is the line's default, 8 on the 68040/68060 line and 2 on the
+68030 line.
+.TP
+.B maxarea
+Pixels per blitter band (0 is the default, 8192): the CPU waits in one
+register write for a whole band and takes no interrupt meanwhile.
+.SH FILES
+.TP 20
+.I /dev/zz9000
+unit 0, the first board
+.TP
+.I /dev/zz9000i
+its information node
+.TP
+.I /dev/zz9001
+unit 1, a second board
+.TP
+.I /dev/zz9001i
+its information node
+.TP
+.I /etc/conf/mod.d/z3660rtg
+the module
+.SH SEE ALSO
+.BR monsw (7),
+.BR ztop (1),
+.BR kbootset (1M)
+.SH NOTES
+The ZZ9000 support follows the card's firmware source (ZZ9000OS 2.9.1);
+older MNT firmware has not been checked.

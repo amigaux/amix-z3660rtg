@@ -1,6 +1,9 @@
 #!/bin/sh
 # run.sh [-v] -- build and run the driver's host tests in three configurations:
 #   module  -DZZ9K_MODULE -DZZ9K_TARGET_Z3660 -DZZ9K_MONSW -DZZ9K_ZZ9KBUS (the loadable module)
+#   module-zz9000z2  the module with a ZZ9000 Zorro II card instead of the Z3660
+#   module-zz9000z3[-k46map|-k30map]  ... a ZZ9000 Zorro III card, inside or above 1 GB
+#   module-both  the module with a Z3660 and a ZZ9000 Zorro II card (units 0 and 1)
 #   zz9000  the static ZZ9000-only driver (upstream's build)
 #   z3660   the static Z3660 driver
 #   module-k46map, module-k30map  the module with the board above the identity map
@@ -39,6 +42,14 @@ build() {
 [ "${1:-}" = -v ] && V=-v
 MOD="-DZZ9K_MODULE -DZZ9K_TARGET_Z3660 -DZZ9K_MONSW -DZZ9K_ZZ9KBUS"
 build module $MOD
+# the module with a real ZZ9000 (Zorro II) in the AutoConfig list instead of the Z3660
+build module-zz9000z2 $MOD -DZZ9K_HOST_ZZ9000Z2
+# a Z3660 and a ZZ9000 Zorro II card together: units 0 and 1
+build module-both $MOD -DZZ9K_HOST_BOTH
+# a ZZ9000 Zorro III card: inside the identity map, and above it as each line maps it
+build module-zz9000z3 $MOD -DZZ9K_HOST_ZZ9000Z3
+build module-zz9000z3-k46map $MOD -DZZ9K_HOST_ZZ9000Z3 -DZZ9K_DEV_KVMAP -DZZ9K_HOST_MAPPED
+build module-zz9000z3-k30map $MOD -DZZ9K_HOST_ZZ9000Z3 -DZZ9K_SPT_MAP -DZZ9K_HOST_MAPPED
 build zz9000
 build z3660 -DZZ9K_TARGET_Z3660
 # the board above the identity map (autoconfig_rtg YES), mapped as each line maps it

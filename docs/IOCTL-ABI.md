@@ -12,7 +12,9 @@ calls the driver: the X server (`Xzz9000`, the x11r6.3 package), the tools here,
 | `SETMODE`, `SETPAN`, `FILL`, `FILLRECT`, `COPYRECT`, `CONPUTS`, `BLITS`, `SVGAIOCSetMonitorSwitch` | a descriptor open for writing, else `EBADF` |
 | `SETREG`, `CONSOLE`, `SETSWITCH` | open for writing (`EBADF`) and privilege (`EPERM`) |
 | `GETREG`, `PROBE` | privilege (`EPERM`) |
-| `read`/`write` of the register block (device offsets below `fb_offset`; ZZ9000 rows only) | privilege (`EPERM`) |
+
+`read`, `write` and `mmap` reach the framebuffer only, on every board (see the 1.1.x section
+at the end): the register page is reached through GETREG and SETREG alone.
 
 The node is `0660 root:sys` (`mkdev.sh`). The X server runs as root and opens the node
 read-write, so it is not affected.
@@ -169,3 +171,85 @@ firmware saturates every measurement at 200 units. A driver without this call an
 the monitor-switch Get. Anything else gives `EPERM`, even for root, and it has no `read`,
 `write` or `mmap`. Its close leaves the monitor switch and the console alone. Ordinary users
 can therefore run `ztop` and `xztop` while `/dev/zz9000` stays `0660`.
+
+# The 1.1.x changes (real ZZ9000 cards)
+
+## The device is the framebuffer alone, on the ZZ9000 too
+
+On the ZZ9000 Zorro II board the device used to start at the card's register page:
+offsets `0x0`-`0xFFFF` were the registers and `fb_offset` was `0x10000`. That page also
+holds the firmware-update, SD, USB, ethernet and video-timing registers (the firmware's
+`zz_regs.h` `0x80`-`0xFE`), and `mmap` handed it to any process that could open the node,
+with no privilege check (`read` and `write` had one). Now, as on the Z3660:
+
+- `GETINFO.fb_offset` and `GETFBINFO.fb_offset` are 0 on every board;
+- `GETINFO.board_size` is the size of the device: `fb_offset + fb_size`. On the Zorro II
+  card that is the 4 MB window less the register page (64 KB) and the firmware's tail
+  (128 KB), `0x3D0000`;
+- `mmap`, `read` and `write` of any offset reach the framebuffer; offsets at or beyond
+  `board_size` give `ENXIO` (`mmap`: no mapping). GETREG and SETREG are unchanged.
+
+A program that maps `board_size` bytes from offset 0 and draws at `fb_offset` (the X server,
+`zz9k_test`, `zz9k_maptest`) works as before. A program that hard-coded `0x10000` as the
+ZZ9000's framebuffer offset, or read registers through `read(2)`, no longer works; none of
+ours does.
+
+
+## Back to the Amiga picture on a ZZ9000
+
+The ZZ9000 passes the Amiga's own video through its output (its capture path, register
+`0x1006`), so one monitor on the card serves both. The driver now switches it:
+
+- `SVGAIOCSetMonitorSwitch` with `SVGAMONITORSWITCH_SVGA` puts the card on RTG (and the RTG
+  pan back where the driver last set it); with `SVGAMONITORSWITCH_Amiga` on native video. In
+  every build, besides the monsw line where there is one.
+- The last close of `/dev/zz9000` (with monsw, i.e. the module) puts the card on native
+  video, unless the framebuffer console shows on it. An X server that exits or is killed
+  thus leaves the Amiga picture.
+- A console write switches the card to RTG only when it is not on RTG already; it no longer
+  rewrites the pan on every write.
+
+The Z3660 has no capture path; nothing changes there. `ZZ9KIOC_SETSWITCH` is unchanged.
+
+## The ZZ9000 as a Zorro III board
+
+The Zorro III card (product 4) is attached now; it used to be refused with "configure card
+as Zorro II". `GETINFO` gives `zorro` 3 and `product` 4. The device is its framebuffer,
+`0x31F0000` bytes (the part of the 128 MB window the firmware leaves to the RTG driver; the
+rest is the firmware's heap, mailbox and audio rings), mapped from offset 0 like the other
+boards. In a real Zorro III slot the board lies above the kernel's first gigabyte, so the
+module maps its register page and the start of its framebuffer for the kernel: 8 MiB on the
+68040/68060 line, 2 MiB on the 68030 line (the `kvfb` parameter, in MiB). User `mmap` reaches
+the whole framebuffer either way. `read`, `write`, `FILL` and the CPU paths of `FILLRECT` and
+`COPYRECT` reach only the mapped part (`ENXIO` beyond it), as on a Z3660 above 1 GB.
+
+The console needs its 1920x800 mode in the mapped part (3 MiB). On the 68030 line, with the
+default 2 MiB, it takes the largest mode that fits (1280x720) and prints which and why;
+`kvfb=3` gives it the full mode. The static driver without mappings still refuses a board
+above 1 GB, with that advice.
+
+## Two boards: units 0 and 1
+
+The driver serves two boards, each with its own state: minor 0 (`/dev/zz9000`, information
+node `/dev/zz9000i`, minor 128) and minor 1 (`/dev/zz9001`, `/dev/zz9001i`, minor 129).
+Boards are given units in a fixed order: the Z3660's onboard RTG first, then ZZ9000 cards
+(Zorro II, then Zorro III), whatever order AutoConfig lists them in. A machine with a Z3660
+keeps it on `/dev/zz9000` when a ZZ9000 card is added; the card is `/dev/zz9001`. With one
+board, unit 1 answers `ENXIO`. The kernel framebuffer console runs on one board at a time,
+the one whose `ZZ9KIOC_CONSOLE` enabled it. `mkdev.sh` makes the unit 1 nodes; a package
+that ships the nodes needs them too.
+
+## Which board is behind the node
+
+`GETINFO`'s `zorro` and `product` together name the board, unchanged in layout (32 bytes):
+
+| `zorro` | `product` | board | `zz9000.h` test |
+|---|---|---|---|
+| 3 | 1 | the Z3660 accelerator's onboard RTG | `ZZ9K_IS_Z3660(&info)` |
+| 2 | 3 | an MNT ZZ9000 card, Zorro II | `ZZ9K_IS_ZZ9000_Z2(&info)` |
+| 3 | 4 | an MNT ZZ9000 card, Zorro III | `ZZ9K_IS_ZZ9000_Z3(&info)` |
+
+No two boards share a pair (the host tests check every row). The information node answers
+`GETINFO` for anyone, so a display start-up script can ask `/dev/zz9000i` without
+privilege; `zz9k_mode` with no mode prints the pair too. Only a ZZ9000 has the capture
+path.
