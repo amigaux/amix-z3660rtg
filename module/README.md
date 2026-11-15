@@ -56,3 +56,14 @@ The register page keeps the serialised class. The reference is weak: on a k46 ke
 1.6 the call does nothing and the module loads as before (its kabi tag stays `k46.1.2`); on
 k30 there is no such class and no reference. The core reports an install or a refusal on
 one console line.
+
+## Known issue: a ZZ9000 Zorro III card on the 68030 line
+
+On a k30 kernel a program drawing into its mapping of a board above 1 GB (a ZZ9000 in a real
+Zorro III slot) can be killed by a `User BUS ERROR` (`FAULT:1`, after a console line
+`WARNING: Hardware Bus Error @ <address>, (<physical> physical)`). The kernel's fault handler
+probes the physical address of a valid user page as if it were a kernel address, which is true
+only inside the first gigabyte, so a bus error there that it would otherwise retry ends the
+process. The driver's page frames are right (the warning shows the expected physical address).
+Seen in emulation only, under sustained drawing; k46 is not affected. A ZZ9000 configured as
+Zorro II, or drawing through `write(2)`, avoids it.
