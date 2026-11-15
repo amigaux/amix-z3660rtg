@@ -44,7 +44,7 @@
 #include "sys/moddefs.h"
 #include "sys/amixddi.h"
 #ifdef ZZ9K_FB_NC
-#error "ZZ9K_FB_NC: hat_cm_fb_add is not in DDI v1, build the module without it"
+#error "ZZ9K_FB_NC: hat_cm_fb_add is not in the DDI; the module asks for the class with DDI_FB_REGISTER"
 #endif
 #ifndef ZZ9K_MONSW
 #error "the module depends on the monsw module (depend=monsw): build it with -DZZ9K_MONSW"
@@ -3246,6 +3246,24 @@ static int zz9000_load();
 static int zz9000_unload();
 static void zz9000_halt();
 
+/*
+ * The framebuffer's cache class on k46 (contract C3-6 section 5): the kit's
+ * DDI_FB_REGISTER, a weak reference to the core's fb_register (k46.1.6), puts unit 0's
+ * framebuffer window -- never its register page -- in the non-cacheable, not serialised
+ * class, so the CPU's stores to it drain through the 68060's store buffer instead of
+ * waiting one by one.  The module's kabi tag does not rise: on a kernel without
+ * fb_register, and on k30, whose 68030 has no such class, the call gives ENOSYS and the
+ * framebuffer keeps the default class.  A refusal (a window outside any AutoConfig entry,
+ * as the Z3660's fixed base under an emulator, or both slots held) is reported by the core
+ * on one console line and is not fatal.  Unit 1 keeps the default class, leaving the
+ * kernel's second slot to another board's driver.  A kit before k46.1.6 has no macro.
+ */
+#ifndef DDI_FB_REGISTER
+#define DDI_FB_REGISTER_DECL        extern int zz9k_fbnone
+#define DDI_FB_REGISTER(pa, len)    ENOSYS
+#endif
+DDI_FB_REGISTER_DECL;
+
 struct mod_drv_data zz9000_drvdata[] = {
     { { 0 }, 0, 0,
       { zz9000open, zz9000close, zz9000read, zz9000write, zz9000ioctl, zz9000mmap },
@@ -3363,8 +3381,15 @@ static int
 zz9000_load(params)
 char *params;
 {
+    struct zz9k_board *bp;
+
     zz9k_params(params);
-    return zz9k_probe(0) ? 0 : ENXIO;   /* every board found is attached, unit 1 too */
+    if (!zz9k_probe(0))                 /* every board found is attached, unit 1 too */
+        return ENXIO;
+    bp = &zz9k_boards[0];
+    if (bp->fb_size)
+        (void)DDI_FB_REGISTER((unsigned long)bp->phys + bp->bt->fb_phys, bp->fb_size);
+    return 0;
 }
 
 /*

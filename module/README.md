@@ -37,3 +37,13 @@ with the default it takes 1280x720 and says so on the console.
 
 The module imports only what the 1.1 kits export (its kabi tags are `k30.1.2` and
 `k46.1.2`, as the 1.1 module's), so it loads on the released 1.1 kernels of both lines.
+
+## The framebuffer's cache class (k46)
+
+At load the module asks the core for the fast class of unit 0's framebuffer window
+(`DDI_FB_REGISTER`, `fb_register`, k46.1.6; amix-dlm contract C3-6 section 5): non-cacheable
+but not serialised, so CPU stores to the framebuffer drain through the 68060's store buffer.
+The register page keeps the serialised class. The reference is weak: on a k46 kernel before
+1.6 the call does nothing and the module loads as before (its kabi tag stays `k46.1.2`); on
+k30 there is no such class and no reference. The core reports an install or a refusal on
+one console line.
