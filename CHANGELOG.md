@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-15 — real MNT ZZ9000 cards; module 1.1.2-1 (63644c7..a23d281)
+
+The ZZ9000 Zorro II device no longer maps its register page, which holds the firmware-update, SD, USB, ethernet and
+video-timing registers: the device is the framebuffer from offset 0 on every board (GETINFO `fb_offset` 0). On a
+ZZ9000, `SVGAIOCSetMonitorSwitch` switches the card's own pass-through, and the last close puts it back on native
+video unless the console is shown there. The blitter fill colour goes in RGB_HI, where the firmware reads it; the
+ZZ9000 blitter stays off by default. A Zorro III ZZ9000 (product 4) is attached, mapped above 1 GB on both lines; on
+the 68030 line the console takes the largest mode that fits in the mapped part. Two units, `/dev/zz9000` and
+`/dev/zz9001`, the Z3660 always unit 0. GETINFO's `zorro`/`product` pairs have names in `zz9000.h` (`ZZ9K_IS_*`).
+`module/README.md` and zz9000(7) added. On a k46.1.6 kernel the module asks for the fast framebuffer cache class
+through a weak `DDI_FB_REGISTER`. What the Z3660 rows write to the card is unchanged (register-write traces
+identical). Not yet run on a real ZZ9000 or in the emulator.
+
 ## 2026-11-01 — the review fixes, the sensors ioctl with ztop and xztop, a board above the identity map; module 1.1.1-1 (643a555..5c433fe)
 
 Commands that change the board need a descriptor open for writing; raw register access, CONSOLE, PROBE and SETSWITCH
