@@ -21,6 +21,12 @@ Two boards are served at once: unit 0 (`/dev/zz9000`, minor 0) and unit 1 (`/dev
 minor 1), each with its information node (minors 128 and 129). The Z3660 is always unit 0;
 a ZZ9000 card beside it is unit 1.
 
+Each board's last close returns only that board to native: a ZZ9000 through its own
+pass-through, the Z3660 through the machine's monitor-switch line (monsw). A board that holds
+the kernel console stays on RTG. The switch line is one for the machine: the console's output
+sets it to RTG whichever board the console is on, so with X on the Z3660 and the console on a
+ZZ9000, `monswctl status` reads native when X exits and RTG again at the next console line.
+
 ## Parameters
 
 | Name | Default | Meaning |
