@@ -171,9 +171,19 @@ setup()
 #else
     *reg16(ZZ9K_REG_HW_VERSION) = 0x0002;
     *reg16(ZZ9K_REG_FW_VERSION) = 0x010d;
+#ifdef ZZ9K_HOST_ZZ9000Z3
+    kboards[0].pc = ZZ9K_PRODUCT_PC_Z3;        /* the 128 MB Zorro III window */
+#ifdef ZZ9K_HOST_MAPPED
+    kboards[0].base = (long)KPHYS;              /* a real Zorro III slot, above 1 GB */
+#else
+    kboards[0].base = (long)WIN;                /* amiberry's z3mapping=uae */
+#endif
+    kboards[0].size = (long)WINSZ;
+#else
     kboards[0].pc = ZZ9K_PRODUCT_PC_Z2;
     kboards[0].base = (long)WIN;
     kboards[0].size = 0x00400000L;
+#endif
 #endif
 }
 
@@ -356,7 +366,7 @@ t_devspace()
     u.uio_offset = 0; u.uio_resid = 8; u.uio_ubase = buf;
     EQ(zz9000read(0, &u, &kuser), 0, "read(2) of offset 0, unprivileged");
     CHECK(memcmp(buf, "FRAMEBUF", 8) == 0, "offset 0 is the framebuffer's first byte");
-#if !HOST_Z3660
+#if !HOST_Z3660 && !defined(ZZ9K_HOST_ZZ9000Z3)
     EQ(info.fb_size, 0x00400000L - 0x10000L - 0x20000L, "Zorro II: 4 MB less registers and tail");
     CHECK(bp->fb == (char *)(WIN + 0x10000), "the framebuffer at +0x10000");
 #endif
@@ -792,7 +802,14 @@ t_console_scroll()
 #if HOST_Z3660
     EQ(zz9k_con_ringh, 2 * zz9k_con_h + zz9k_console_font_h, "a pan ring on the Z3660");
 #else
+    if ((unsigned long)(2 * zz9k_con_h + zz9k_console_font_h) * zz9k_con_w * 2 <=
+        zz9k_boards[0].fb_kmap)
+        EQ(zz9k_con_ringh, 2 * zz9k_con_h + zz9k_console_font_h, "a pan ring where it fits");
+    else
+        EQ(zz9k_con_ringh, zz9k_con_h, "no pan ring where the kernel's part cannot hold it");
+#ifndef ZZ9K_HOST_ZZ9000Z3
     EQ(zz9k_con_ringh, zz9k_con_h, "no pan room in the ZZ9000's Zorro II window");
+#endif
 #endif
     for (i = 0; i < zz9k_console_rows; ++i)
         cwrite("\n");          /* the cursor on the last row: every line scrolls from here */
@@ -969,6 +986,103 @@ t_mapped_short()
     bp->base = 0;
     EQ(zz9k_probe(0), 1, "mapped again");
     EQ(bp->fb_kmap, 8 * 0x100000L, "with kvfb 8, 8 MiB");
+}
+#endif
+
+#ifdef ZZ9K_HOST_ZZ9000Z3
+/*
+ * The ZZ9000 as a Zorro III board: 16-bit registers at the Zorro II offsets, the framebuffer
+ * at +0x10000, P96's 0x31F0000 bytes of the 128 MB window; inside the identity map reached
+ * directly, above it through the register page and the start of the framebuffer mapped.
+ */
+static void
+t_zz9000z3()
+{
+    struct zz9k_board *bp = &zz9k_boards[0];
+    struct zz9k_info info;
+    struct zz9k_mode m;
+
+    CHECK(bp->bt && bp->bt->autocon_pc == ZZ9K_PRODUCT_PC_Z3 && !(bp->bt->flags & ZZ9K_BT_REJECT),
+        "attached by the Zorro III row");
+    EQ(ioc(ZZ9KIOC_GETINFO, 64, &info, sizeof info, FREAD, &kuser), 0, "GETINFO");
+    CHECK(info.zorro == 3 && info.product == 4, "GETINFO: zorro 3, product 4");
+    EQ(info.fb_offset, 0, "the device is the framebuffer");
+    EQ(info.fb_size, 0x031f0000L, "P96's part of the window");
+    EQ(info.board_size, 0x031f0000L, "board_size the device");
+    EQ(bp->bt->regw, 2, "16-bit register access");
+    EQ(bp->bt->reg_size, 0x2000, "the register page and the capture page");
+#ifdef ZZ9K_HOST_MAPPED
+    EQ(bp->phys, (long)KPHYS, "at its physical base above the identity map");
+    EQ(bp->mapped, 1, "through kernel mappings");
+    EQ(bp->base, (long)KWIN, "the register page mapped");
+    CHECK(bp->fb == (char *)(KWIN + 0x10000), "the framebuffer mapped from +0x10000");
+#ifdef ZZ9K_DEV_KVMAP
+    EQ(bp->fb_kmap, 8 * 0x100000L, "8 MiB of it on k46");
+#else
+    EQ(bp->fb_kmap, 2 * 0x100000L, "2 MiB of it on k30");
+#endif
+    EQ(kmapped, 0x2000 + bp->fb_kmap, "only the register pages and that part");
+#else
+    EQ(bp->mapped, 0, "inside the identity map: no mapping");
+    CHECK(bp->fb == (char *)(WIN + 0x10000), "the framebuffer at +0x10000");
+    EQ(bp->fb_kmap, 0x031f0000L, "the kernel reaches all of it");
+#endif
+    EQ(zz9000mmap(0, (off_t)0x03000000, 0), phystopfn(bp->phys + 0x10000 + 0x03000000),
+        "user mmap reaches the whole framebuffer by physical page");
+    EQ(zz9000mmap(0, (off_t)0x031f0000, 0), -1, "not the firmware's heap above it");
+    m.width = 1920; m.height = 1080; m.color_mode = ZZ9K_COLOR_32BIT; m.scale_mode = 0;
+    EQ(ioc(ZZ9KIOC_SETMODE, 64, &m, sizeof m, RW, &kroot), 0, "1920x1080 at 32 bits fits");
+    EQ(*reg16(ZZ9K_REG_MODE), ZZ9K_MODE_1920x1080 | (ZZ9K_COLOR_32BIT << 8), "MODE, 16 bits");
+    /* the console: its 1920x800 mode where the kernel's part holds it, else a smaller one */
+    klogn = 0;
+    EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_ENABLE, RW, &kroot), 0, "console on");
+#if defined(ZZ9K_HOST_MAPPED) && defined(ZZ9K_SPT_MAP)
+    CHECK(zz9k_con_w == 1280 && zz9k_con_h == 720, "k30: 1280x720, the largest mode in 2 MiB");
+    CHECK(strstr(klog, "console 1920x800 needs") != 0 && strstr(klog, "kvfb=3") != 0,
+        "and says why, with the kvfb that would hold it");
+#else
+    CHECK(zz9k_con_w == 1920 && zz9k_con_h == 800, "the row's 1920x800");
+#endif
+    CHECK((unsigned long)zz9k_con_ringh * zz9k_con_w * 2 <= bp->fb_kmap,
+        "the console's rows inside the kernel's part");
+    EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_DISABLE, RW, &kroot), 0, "console off");
+#if defined(ZZ9K_HOST_MAPPED) && defined(ZZ9K_SPT_MAP)
+    /* kvfb=3: the whole 1920x800 console */
+    zz9000_unload();
+    EQ(kmapped, 0, "unload releases the mappings");
+    bp->base = 0;
+    zz9k_kvfb = 3;
+    EQ(zz9k_probe(0), 1, "probed again with kvfb 3");
+    EQ(bp->fb_kmap, 3 * 0x100000L, "3 MiB mapped");
+    EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_ENABLE, RW, &kroot), 0, "console on");
+    CHECK(zz9k_con_w == 1920 && zz9k_con_h == 800 && zz9k_con_ringh == 800,
+        "1920x800, no pan ring");
+    EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_DISABLE, RW, &kroot), 0, "console off");
+    zz9k_kvfb = ZZ9K_KVFB_DEFAULT;
+#endif
+}
+#endif
+
+#ifndef ZZ9K_TARGET_Z3660
+/* last: the static ZZ9000 driver has no mappings: a Zorro III card above 1 GB is refused */
+static void
+t_z3_static()
+{
+    struct zz9k_board *bp = &zz9k_boards[0];
+    struct kboard keep;
+
+    keep = kboards[0];
+    kboards[0].pc = ZZ9K_PRODUCT_PC_Z3;
+    kboards[0].base = 0x40000000L;
+    kboards[0].size = 0x08000000L;
+    bp->base = 0;
+    klogn = 0;
+    EQ(zz9k_probe(0), 0, "no board: this build cannot map it");
+    CHECK(strstr(klog, "outside the identity map") != 0 &&
+        strstr(klog, "configure the card as Zorro II") != 0, "and says so, with the advice");
+    kboards[0] = keep;
+    zz9k_noboard[0] = 0;
+    EQ(zz9k_probe(0), 1, "the Zorro II card again");
 }
 #endif
 
@@ -1203,7 +1317,13 @@ char **argv;
     t_layout();
     t_getmodes();
     t_sensors();
+#ifdef ZZ9K_HOST_ZZ9000Z3
+    t_zz9000z3();
+#endif
     t_fixed();
+#ifndef ZZ9K_TARGET_Z3660
+    t_z3_static();
+#endif
     printf("%s: %d passed, %d failed\n", ZZ9K_HOST_CONFIG, npass, nfail);
     return nfail != 0;
 }

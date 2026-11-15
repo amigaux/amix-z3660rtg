@@ -5,9 +5,10 @@
  * Copyright (c) 2026 Ignacio Soriano.  The Z3660 target and later changes
  * Copyright (c) 2026 Jussi Alanärä.  SPDX-License-Identifier: MIT
  *
- * The ZZ9000 is attached as Zorro II product 3; its Zorro III product 4 lies
- * outside the kernel's identity map and is refused with advice.  The Z3660's
- * RTG (-DZZ9K_TARGET_Z3660) is reached at its hard-mapped window.
+ * The ZZ9000 is attached as Zorro II product 3 or Zorro III product 4 (above
+ * the kernel's identity map through kernel mappings, in a build that has
+ * them).  The Z3660's RTG (-DZZ9K_TARGET_Z3660) is reached at its hard-mapped
+ * window.
  */
 
 #ifndef ZZ9000_H
@@ -55,8 +56,9 @@
 #define ZZ9K_REG_BLITTER_SPLIT_POS 0x005e
 
 #define ZZ9K_REG_SIZE          0x00002000UL
-#define ZZ9K_FB_OFFSET         0x00010000UL
-#define ZZ9K_Z2_RESERVED_TAIL  0x00020000UL
+#define ZZ9K_FB_OFFSET         0x00010000UL  /* the framebuffer in the board window */
+#define ZZ9K_Z2_RESERVED_TAIL  0x00020000UL  /* Zorro II: the SDK host heap and audio scratch */
+#define ZZ9K_Z3_FB_MAX         0x031f0000UL  /* Zorro III: P96 VRAM, ARM 0x200000-0x33EFFFF */
 #define ZZ9K_FW_VER_MIN        0x010d
 
 #define ZZ9K_COLOR_8BIT        0
@@ -457,6 +459,7 @@ struct zz9k_conputs {
 #define ZZ9K_BT_AGAGATE        0x0002  /* fixed row: probe only on an AGA chipset */
 #define ZZ9K_BT_NOCAPTURE      0x0004  /* no native-video capture path: SETSWITCH is a no-op */
 #define ZZ9K_BT_BLITTER        0x0008  /* FILLRECT/COPYRECT/BLITS use the card's blitter */
+#define ZZ9K_BT_CONFIT         0x0010  /* the console takes a smaller mode that the kernel's part holds */
 
 struct zz9k_modetab {
     unsigned short width;

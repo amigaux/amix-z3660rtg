@@ -6,9 +6,10 @@
  *
  * Board identity, window layout and register file are data: one row of
  * zz9k_boardtab[] per supported board (see zz9000.h).  The default rows
- * are the ZZ9000 Zorro II product 3 (attached) and the Zorro III product 4
- * (identified and refused: its window lies outside the kernel's
- * identity-mapped low 1 GB).  A target build (-DZZ9K_TARGET_...) adds rows.
+ * are the ZZ9000 Zorro II product 3 and the Zorro III product 4 (reached
+ * directly inside the identity-mapped low 1 GB, through kernel mappings
+ * above it in a build that has them).  A target build (-DZZ9K_TARGET_...)
+ * adds rows.
  * The DMA paths from the AmigaOS and NetBSD drivers are intentionally not
  * used here.
  */
@@ -511,34 +512,30 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
       0, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
       2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
       ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
-      ZZ9K_FW_VER_MIN, 0, 2, ZZ9K_PRODUCT_Z2, ZZ9K_BT_BLIT_ZZ9000,
+      ZZ9K_FW_VER_MIN, 0, 2, ZZ9K_PRODUCT_Z2, ZZ9K_BT_BLIT_ZZ9000 | ZZ9K_BT_CONFIT,
       zz9k_regwin_zz9000, 0 },
-#ifndef ZZ9K_BENCH_Z3
-    { "Zorro III product", "configure card as Zorro II product 3 for AMIX",
-      ZZ9K_PRODUCT_PC_Z3, 0, 0,
-      0, ZZ9K_FB_OFFSET, 0, ZZ9K_Z2_RESERVED_TAIL, ZZ9K_REG_SIZE,
-      2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
-      ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
-      ZZ9K_FW_VER_MIN, 0, 3, ZZ9K_PRODUCT_Z3, ZZ9K_BT_REJECT,
-      zz9k_regwin_zz9000, 0 }
-#else
     /*
-     * Bench aid, not a supported configuration: amiberry can place its
-     * ZZ9000 Zorro III model inside the identity map (z3mapping=uae puts
-     * it at 0x10000000), which rehearses a 32-bit window before the Z3660
-     * stand-in exists.  Replaces the product 4 rejection above; same
-     * register file and layout as the Zorro II row, framebuffer capped so
-     * the mapping stays small.  The probe still refuses a product 4 that
-     * lies outside the identity map.
+     * The Zorro III form: the same register file at the same offsets, reached with 16-bit
+     * accesses only -- the firmware takes one 16-bit half of a register longword per write
+     * (ZZ9000OS main.c, the Z3 conversion: DS3+DS2 the high half, DS1+DS0 the low half at
+     * +2, anything else cancelled), so a 32-bit value goes as HI then LO (zz9k_wr32).  The
+     * framebuffer at +0x10000 as on Zorro II (the board window maps to the card's DDR at
+     * board offset + 0x1F0000, memorymap.h ADDR_ADJ), and of the 128 MB window (64 MB on the
+     * FW20 variant, mntzorro.v) the part P96 owns, ARM 0x200000-0x33EFFFF (memorymap.h
+     * Z3_P96_VRAM_ADDRESS..Z3_P96_VRAM_END): above it the firmware keeps its host-visible
+     * heap, GFXData and template scratch, the SDK mailbox and host windows and the audio
+     * rings at the top of the window.  Device space is that framebuffer alone.  Inside the
+     * identity map (amiberry's z3mapping=uae, at 0x10000000) it is reached directly;
+     * above it (every real Zorro III slot, from 0x40000000) through the kernel mappings of
+     * the register page and the start of the framebuffer (zz9k_attach_mapped).
      */
-    { "Zorro III board (bench)", "",
+    { "Zorro III board", "this kernel cannot map a board above 1 GB: configure the card as Zorro II",
       ZZ9K_PRODUCT_PC_Z3, 0, 0,
-      0, ZZ9K_FB_OFFSET, ZZ9K_Z3660_FB_MAX, 0, ZZ9K_REG_SIZE,
+      0, ZZ9K_FB_OFFSET, ZZ9K_Z3_FB_MAX, 0, ZZ9K_REG_SIZE,
       2, zz9k_regoff_zz9000, zz9k_modes_zz9000,
       ZZ9K_CON_WIDTH, ZZ9K_CON_HEIGHT,
-      ZZ9K_FW_VER_MIN, 0, 3, ZZ9K_PRODUCT_Z3, ZZ9K_BT_BLIT_ZZ9000,
+      ZZ9K_FW_VER_MIN, 0, 3, ZZ9K_PRODUCT_Z3, ZZ9K_BT_BLIT_ZZ9000 | ZZ9K_BT_CONFIT,
       zz9k_regwin_zz9000, 0 }
-#endif /* ZZ9K_BENCH_Z3 */
 #ifdef ZZ9K_TARGET_Z3660
     /*
      * The combo board as the AutoConfig table lists it.  On real hardware
@@ -700,6 +697,23 @@ struct zz9k_board *bp;
 
 
 /*
+ * The framebuffer's bytes on a board of size bytes: the row's fixed size (fb_max) when the
+ * window holds it, else what the window holds above fb_phys, less the row's reserved tail.
+ */
+static unsigned long
+zz9k_fbsize(bt, size)
+struct zz9k_boardtab *bt;
+unsigned long size;
+{
+    unsigned long room;
+
+    room = size > bt->fb_phys + bt->reserved_tail ? size - bt->fb_phys - bt->reserved_tail : 0;
+    if (bt->fb_max && bt->fb_max <= room)
+        return bt->fb_max;
+    return room;
+}
+
+/*
  * Attach the row's board at physical base.  kregs and kfb are the kernel's addresses of the
  * register page and the framebuffer when the window is mapped (kfblen bytes of it), or 0
  * when it lies in the identity map and the physical address is the kernel's.
@@ -734,12 +748,7 @@ unsigned long kfblen;
      * what read(2), write(2) and mmap(2) reach and what GETINFO reports, so a client may
      * map board_size bytes from offset 0.
      */
-    if (bt->fb_max)
-        bp->fb_size = bt->fb_max;
-    else if ((unsigned long)size > bt->fb_phys + bt->reserved_tail)
-        bp->fb_size = (unsigned long)size - bt->fb_phys - bt->reserved_tail;
-    else
-        bp->fb_size = 0;
+    bp->fb_size = zz9k_fbsize(bt, (unsigned long)size);
     bp->board_size = bt->fb_offset + bp->fb_size;
     bp->fb = (char *)base + bt->fb_phys;
     bp->fb_kmap = bp->fb_size;
@@ -812,7 +821,13 @@ extern void dev_kvunmap();
 #else
 extern char *sptalloc();
 extern void sptfree();
-#define ZZ9K_KVFB_DEFAULT  2        /* MiB, of the 4 MiB pool other drivers share */
+/*
+ * MiB, of the 4 MiB pool (sptmap) page[], the u-areas and other drivers draw on too: a
+ * ZZ9000's 1920x800 console needs 3 (kvfb=3) and otherwise takes a smaller mode
+ * (zz9k_con_fit).  A larger request halves until sptalloc finds the room; it never
+ * reaches past the pool.
+ */
+#define ZZ9K_KVFB_DEFAULT  2
 #endif
 #define ZZ9K_KVFB_MIN      1
 #define ZZ9K_KVFB_LIMIT    46
@@ -874,7 +889,9 @@ long size;
 
     if (bt->fb_offset != 0 || bt->reg_size == 0)
         return 0;
-    fbsize = bt->fb_max ? bt->fb_max : (unsigned long)size - bt->fb_phys - bt->reserved_tail;
+    fbsize = zz9k_fbsize(bt, (unsigned long)size);
+    if (fbsize == 0)
+        return 0;
     zz9k_kregs = zz9k_map((unsigned long)base, bt->reg_size, ZZ9K_CM_NCS);
     zz9k_kregslen = bt->reg_size;
     if (!zz9k_kregs) {
@@ -2040,6 +2057,40 @@ unsigned char c;
     zz9k_console_cursor(1);
 }
 
+/*
+ * A row with ZZ9K_BT_CONFIT whose console mode does not fit the part of the framebuffer the
+ * kernel maps (a board above the identity map on the 68030 line: kvfb MiB of a 4 MiB pool
+ * the whole kernel shares) takes the largest mode of its table that does, and says so; the
+ * console never draws past that part.  ZZ9K_NOMODE, and why, when none fits.
+ */
+static unsigned short
+zz9k_con_fit(bp)
+struct zz9k_board *bp;
+{
+    struct zz9k_modetab *m, *best;
+    unsigned long need, a;
+
+    need = (unsigned long)bp->bt->con_width * bp->bt->con_height * 2;
+    best = (struct zz9k_modetab *)0;
+    for (m = bp->bt->modes; m->width; ++m) {
+        a = (unsigned long)m->width * m->height;
+        if (a * 2 <= bp->fb_kmap &&
+            (!best || a > (unsigned long)best->width * best->height))
+            best = m;
+    }
+    if (!best) {
+        printf("zz9000: no console mode fits the 0x%x bytes of the framebuffer the kernel maps\n",
+            (unsigned int)bp->fb_kmap);
+        return ZZ9K_NOMODE;
+    }
+    printf("zz9000: console %dx%d needs 0x%x bytes, the kernel maps 0x%x (kvfb=%d for it): %dx%d\n",
+        bp->bt->con_width, bp->bt->con_height, (unsigned int)need, (unsigned int)bp->fb_kmap,
+        (int)((need + 0xfffffUL) >> 20), best->width, best->height);
+    zz9k_con_w = best->width;
+    zz9k_con_h = best->height;
+    return best->id;
+}
+
 static int
 zz9k_console_start(bp)
 struct zz9k_board *bp;
@@ -2053,8 +2104,13 @@ struct zz9k_board *bp;
         return EINVAL;
     zz9k_con_w = bp->bt->con_width;
     zz9k_con_h = bp->bt->con_height;
-    if ((unsigned long)zz9k_con_w * zz9k_con_h * 2 > bp->fb_kmap)
-        return ENOMEM;
+    if ((unsigned long)zz9k_con_w * zz9k_con_h * 2 > bp->fb_kmap) {
+        if (!(bp->bt->flags & ZZ9K_BT_CONFIT))
+            return ENOMEM;
+        id = zz9k_con_fit(bp);
+        if (id == ZZ9K_NOMODE)
+            return ENOMEM;
+    }
 
     zz9k_set_mode_hw(bp, id, ZZ9K_CON_COLOR, 0);
     bp->width = zz9k_con_w;
