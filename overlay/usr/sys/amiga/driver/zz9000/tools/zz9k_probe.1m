@@ -1,0 +1,80 @@
+.\" Copyright (c) 2026 Jussi Alanärä.  SPDX-License-Identifier: MIT
+.TH ZZ9K_PROBE 1M "15 November 2026" "amix-z3660rtg" "System Administration"
+.SH NAME
+zz9k_probe \- say which board is behind the Z3660/ZZ9000 RTG driver
+.SH SYNOPSIS
+.B zz9k_probe z3660
+.br
+.B zz9k_probe zz9000
+.SH DESCRIPTION
+.B zz9k_probe
+is the probe of the RTG driver's card files in
+.IR /etc/display.d :
+the display start-up runs it to learn whether the card a file describes is
+there (see the PROBES section of
+.BR display.d (4)).
+The Z3660's onboard RTG and an MNT ZZ9000 card share the driver and its
+node names, so whether a node opens cannot tell them apart.
+.PP
+For units 0 and 1 it opens the information node,
+.I /dev/zz9000i
+or
+.IR /dev/zz9001i ,
+read-only, asks the driver for the unit's board identity with one
+.B ZZ9KIOC_GETINFO
+and closes it.
+The driver answers from what it found when it loaded; nothing is written to
+any board and the main nodes are never opened.
+A unit whose node does not open, or for which the driver has no board, is
+not there.
+Opening the information node loads the driver's module when it is not
+loaded yet, as any open of the node does.
+.TP
+.B z3660
+Exit 0 when unit 0 is the Z3660's RTG, and print
+.RS
+.nf
+node /dev/zz9000
+.fi
+.RE
+.TP
+.B zz9000
+Take the first unit, 0 then 1, that is a ZZ9000 card, Zorro II or Zorro
+III, print its node,
+.RS
+.nf
+node /dev/zz9001
+.fi
+.RE
+.IP
+and exit 0.
+For a card in a Zorro III slot it also prints the modes it takes at 16
+bits, the card file's list and 1920x1080:
+.RS
+.nf
+modes 1024x768 640x480 800x600 1280x720 1280x1024 1920x800 1920x1080
+.fi
+.RE
+.IP
+A Zorro II card's framebuffer (its 4 MB window less the register page and
+the firmware's tail, 3.8 MB) holds 1920x800 at 16 bits but not 1920x1080.
+.PP
+It prints nothing else and never writes to its standard error unless the
+argument is wrong.
+It returns at once, and is safe to run as any user, with no board fitted
+and inside a
+.BR chroot (1M).
+.SH EXIT STATUS
+0 when the board asked for is there; 1 when it is not (no such unit, no
+node, no driver, another board); 2 for a usage error.
+.SH FILES
+.TP 20
+.I /dev/zz9000i
+unit 0's information node (character 49, minor 128, mode 0444)
+.TP
+.I /dev/zz9001i
+unit 1's (character 49, minor 129, mode 0444)
+.SH SEE ALSO
+.BR display.d (4),
+.BR xstart (1),
+.BR zz9000 (7)

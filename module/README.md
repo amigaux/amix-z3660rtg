@@ -19,7 +19,9 @@ One object serves every board the driver knows, found at run time:
 
 Two boards are served at once: unit 0 (`/dev/zz9000`, minor 0) and unit 1 (`/dev/zz9001`,
 minor 1), each with its information node (minors 128 and 129). The Z3660 is always unit 0;
-a ZZ9000 card beside it is unit 1.
+a ZZ9000 card beside it is unit 1. `zz9k_probe z3660|zz9000` (`../overlay/.../zz9000/tools/zz9k_probe.c`,
+zz9k_probe(1M)) tells display.d's card files which board is on which unit, from `GETINFO`
+on the information nodes alone.
 
 Each board's last close returns only that board to native: a ZZ9000 through its own
 pass-through, the Z3660 through the machine's monitor-switch line (monsw). A board that holds
