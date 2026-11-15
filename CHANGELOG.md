@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-15 — zz9k_probe takes a unit (a7b0509)
+
+`zz9k_probe zz9000 0|1` asks one unit only: it opens only that unit's information node, exits 0 with `node /dev/zz900N` when the unit is a ZZ9000 (adding the `modes` line for Zorro III), and otherwise exits 1 with no output, so each display.d card file can cover one unit. `zz9000` with no unit and `z3660` work as before; any other form gives usage and exit 2.
+
 ## 2026-11-15 — zz9k_probe, the display start-up's probe (a431bed)
 
 `zz9k_probe z3660|zz9000` (tools/zz9k_probe.c, zz9k_probe(1M)) says which board is behind the driver, for the
