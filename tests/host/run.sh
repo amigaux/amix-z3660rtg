@@ -1,6 +1,7 @@
 #!/bin/sh
 # run.sh [-v] -- build and run the driver's host tests in three configurations:
 #   module  -DZZ9K_MODULE -DZZ9K_TARGET_Z3660 -DZZ9K_MONSW (the loadable module)
+#   module-zz9000z2  the module with a ZZ9000 Zorro II card instead of the Z3660
 #   zz9000  the static ZZ9000-only driver (upstream's build)
 #   z3660   the static Z3660 driver
 #   module-k46map, module-k30map  the module with the board above the identity map
@@ -27,6 +28,8 @@ build() {
 }
 [ "${1:-}" = -v ] && V=-v
 build module -DZZ9K_MODULE -DZZ9K_TARGET_Z3660 -DZZ9K_MONSW
+# the module with a real ZZ9000 (Zorro II) in the AutoConfig list instead of the Z3660
+build module-zz9000z2 -DZZ9K_MODULE -DZZ9K_TARGET_Z3660 -DZZ9K_MONSW -DZZ9K_HOST_ZZ9000Z2
 build zz9000
 build z3660 -DZZ9K_TARGET_Z3660
 # the board above the identity map (autoconfig_rtg YES), mapped as each line maps it

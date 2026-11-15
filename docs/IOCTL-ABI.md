@@ -194,3 +194,19 @@ A program that maps `board_size` bytes from offset 0 and draws at `fb_offset` (t
 ZZ9000's framebuffer offset, or read registers through `read(2)`, no longer works; none of
 ours does.
 
+
+## Back to the Amiga picture on a ZZ9000
+
+The ZZ9000 passes the Amiga's own video through its output (its capture path, register
+`0x1006`), so one monitor on the card serves both. The driver now switches it:
+
+- `SVGAIOCSetMonitorSwitch` with `SVGAMONITORSWITCH_SVGA` puts the card on RTG (and the RTG
+  pan back where the driver last set it); with `SVGAMONITORSWITCH_Amiga` on native video. In
+  every build, besides the monsw line where there is one.
+- The last close of `/dev/zz9000` (with monsw, i.e. the module) puts the card on native
+  video, unless the framebuffer console shows on it. An X server that exits or is killed
+  thus leaves the Amiga picture.
+- A console write switches the card to RTG only when it is not on RTG already; it no longer
+  rewrites the pan on every write.
+
+The Z3660 has no capture path; nothing changes there. `ZZ9KIOC_SETSWITCH` is unchanged.

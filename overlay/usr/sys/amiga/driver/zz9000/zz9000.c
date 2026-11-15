@@ -141,6 +141,8 @@ struct zz9k_board {
     unsigned short reg_hi;        /* SETREG HI-lane latch on a 32-bit row */
     short monsw_handle;           /* monsw registration, -1 = none */
     short svga_switch;            /* last SVGAIOCSetMonitorSwitch: 1 Amiga, 2 SVGA */
+    short capture;                /* the card shows: 1 native video (capture), 0 RTG, -1 not known */
+    unsigned long pan;            /* the RTG pan the driver last wrote */
     unsigned long blitreg[ZZ9K_NREG];  /* blitter registers as last written */
     unsigned long blitvalid;      /* bit r: blitreg[r] is what the card holds */
 };
@@ -210,7 +212,10 @@ extern int hat_cm_fb_add();
  * X servers' rtg/ layer issues on its own device at screen init and at exit; (c) calls
  * monsw_lastclose() on its last close, so a server that dies leaves the monitor on the native
  * video.  Built with -DZZ9K_MONSW, i.e. only for kernels that link monsw; without it the
- * ioctls are answered but switch nothing (the r13 lineage keeps startx-rtg's fallback).
+ * ioctls are answered but switch no monitor line (the r13 lineage keeps startx-rtg's fallback).
+ * A card with its own capture path (the ZZ9000's pass-through, one monitor on the card) is
+ * switched as well, in every build: Set SVGA to RTG, Set Amiga to native video; and, with
+ * monsw, its last close returns it to native video.  The Z3660 has no capture path.
  */
 #ifdef ZZ9K_MONSW
 #include <sys/monsw.h>
@@ -1384,6 +1389,7 @@ unsigned long off;
     zz9k_bwr(bp, ZZ9K_R_X2, (unsigned long)bp->width);
     zz9k_bwr(bp, ZZ9K_R_COLORMODE, (unsigned long)(bp->color_mode | ZZ9K_COLORMODE_MASK));
     zz9k_wr32(bp, ZZ9K_R_PAN, off);
+    bp->pan = off;
     --zz9k_blit_inuse;
 }
 
@@ -1409,10 +1415,21 @@ unsigned short scale_mode;
         (unsigned long)(mode | (color_mode << 8) | (scale_mode << 12)));
     bp->mode = mode;
     bp->color_mode = color_mode;
+    bp->pan = 0;
     ZZ9K_BLIT_FORGET(bp);
     --zz9k_blit_inuse;
 }
 
+/*
+ * The card's own output switch, on a row with a capture path (the ZZ9000: the FPGA's
+ * videocap_mode_in, register 0x1006, mntzorro.v REGWRITE 'h06).  To native video: the
+ * capture area's legacy pan, then capture on -- firmware that derives the capture origin
+ * itself ignores that pan value (main.c REG_ZZ_PAN_LO, VIDEOCAP_NATIVE_PAN_LEGACY_BASE), and
+ * older firmware took it as the pan.  To RTG: capture off, then the RTG pan written again
+ * through zz9k_set_pan, for the firmware that took the capture pan as its own; not from
+ * inside a blitter operation, whose X1/Y1/X2 the pan would disturb (the pan then waits
+ * for the next mode or pan).  A row without capture (the Z3660) has nothing to switch.
+ */
 static void
 zz9k_set_switch_hw(bp, enabled)
 struct zz9k_board *bp;
@@ -1423,10 +1440,22 @@ unsigned short enabled;
     if (enabled == ZZ9K_SWITCH_CAPTURE) {
         zz9k_wr32(bp, ZZ9K_R_PAN, ZZ9K_CAPTURE_PAN);
         zz9k_wr(bp, ZZ9K_R_CAPTURE, 1);
+        bp->capture = 1;
     } else {
         zz9k_wr(bp, ZZ9K_R_CAPTURE, 0);
-        zz9k_wr32(bp, ZZ9K_R_PAN, 0);
+        if (!zz9k_blit_inuse)
+            zz9k_set_pan(bp, bp->pan);
+        bp->capture = 0;
     }
+}
+
+/* The console's way back to RTG, at every write: only when the card is not on RTG already. */
+static void
+zz9k_rtg_on(bp)
+struct zz9k_board *bp;
+{
+    if (bp->capture != 0)
+        zz9k_set_switch_hw(bp, ZZ9K_SWITCH_RTG);
 }
 
 /*
@@ -1441,6 +1470,8 @@ struct zz9k_board *bp;
     bp->monsw_handle = -1;
     ZZ9K_BLIT_FORGET(bp);
     bp->svga_switch = 1;
+    bp->capture = -1;                   /* AmigaOS may have left the card on either */
+    bp->pan = 0;
 #ifdef ZZ9K_MONSW
     {
         unsigned long v;
@@ -2244,7 +2275,7 @@ unsigned n;
         return 1;
     }
     if (zz9k_console_bp) {
-        zz9k_set_switch_hw(zz9k_console_bp, ZZ9K_SWITCH_RTG);
+        zz9k_rtg_on(zz9k_console_bp);
         ZZ9K_MONSW_SET(1);
     }
     while (n--)
@@ -2386,6 +2417,13 @@ struct cred *cr;
         monsw_lastclose(zz9k_boards[unit].monsw_handle);
         zz9k_boards[unit].svga_switch = SVGAMONITORSWITCH_Amiga;   /* what Get answers now */
     }
+    /*
+     * A card with its own capture path (the ZZ9000, one monitor on its output) shows the
+     * Amiga picture again; a row without one (the Z3660) is not touched.
+     */
+    if (unit < ZZ9K_MAXBOARDS && zz9k_boards[unit].base &&
+        !(zz9k_console_redirect && zz9k_console_bp == &zz9k_boards[unit]))
+        zz9k_set_switch_hw(&zz9k_boards[unit], ZZ9K_SWITCH_CAPTURE);
 #endif
     /* the client that paused the console is gone: the console takes the screen back */
     if (unit < ZZ9K_MAXBOARDS && zz9k_console_redirect && zz9k_console_paused &&
@@ -2783,6 +2821,10 @@ int *rvalp;
             return EINVAL;
         bp->svga_switch = (short)sw;
         ZZ9K_MONSW_SET(sw == SVGAMONITORSWITCH_SVGA);
+        /* a card with its own capture path switches its output too (not the Z3660) */
+        if (bp->base)
+            zz9k_set_switch_hw(bp, sw == SVGAMONITORSWITCH_SVGA ?
+                ZZ9K_SWITCH_RTG : ZZ9K_SWITCH_CAPTURE);
         return 0;
     }
     if (cmd == ZZ9KIOC_BLITS)           /* outside the switch for the same reason */

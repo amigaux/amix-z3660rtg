@@ -43,12 +43,24 @@ void (*conputc)();
 struct zz9k_font *builtinfont[1];
 #endif
 
+/*
+ * The board under test: the Z3660 in a Z3660-target build, unless the configuration puts a
+ * ZZ9000 in the AutoConfig list instead (ZZ9K_HOST_ZZ9000Z2: the Zorro II card at WIN).
+ */
+#if defined(ZZ9K_TARGET_Z3660) && !defined(ZZ9K_HOST_ZZ9000Z2) && !defined(ZZ9K_HOST_ZZ9000Z3)
+#define HOST_Z3660 1
+#else
+#define HOST_Z3660 0
+#endif
+
 #define WIN     0x10000000UL
 #define WINSZ   0x08000000UL
 #define RW      (FREAD | FWRITE)
 
 static int nfail, npass;
 static int cell_is();
+static int cwrite();
+static void setmode();
 
 #define CHECK(cond, what) \
     do { if (cond) ++npass; else { ++nfail; \
@@ -70,6 +82,17 @@ reg16(off)
 unsigned int off;
 {
     return (volatile unsigned short *)(WIN + off);
+}
+
+/* the board's MODE register as last written */
+static unsigned int
+regmode()
+{
+#if HOST_Z3660
+    return *reg32(ZZ9K_Z3660_REG_MODE);
+#else
+    return *reg16(ZZ9K_REG_MODE);
+#endif
 }
 
 /* ioctl with an argument copied to user space at uoff (0: arg is the value itself) */
@@ -136,7 +159,7 @@ setup()
         exit(2);
     }
     *(volatile unsigned short *)0xdff004UL = 0x2300;     /* Alice: AGA */
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     *reg32(ZZ9K_Z3660_REG_FW_VERSION) = 0x0103;
     kboards[0].pc = ZZ9K_Z3660_PRODUCT_PC;
 #ifdef ZZ9K_HOST_MAPPED
@@ -173,7 +196,7 @@ t_privilege()
         "SETMODE, read-write, unprivileged");
     m.scale_mode = 3;
     EQ(ioc(ZZ9KIOC_SETMODE, 64, &m, sizeof m, RW, &kuser), 0, "scale_mode 3");
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     EQ((*reg32(ZZ9K_Z3660_REG_MODE) >> 12) & 0xf, 3, "scale in MODE bits 12-15");
 #endif
     m.scale_mode = 4;
@@ -183,7 +206,7 @@ t_privilege()
         "a scale_mode that would spill into the next field refused");
     m.scale_mode = 0;
     zr.offset = 0x0a; zr.value = 0;
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     zr.offset = ZZ9K_Z3660_REG_PAN;
 #endif
     EQ(ioc(ZZ9KIOC_SETREG, 64, &zr, sizeof zr, RW, &kuser), EPERM, "SETREG unprivileged");
@@ -208,6 +231,77 @@ t_privilege()
         "a bad user address gives EFAULT");
     /* read(2): the device is the framebuffer alone, on every board */
     EQ(kread(0L, 16L, &kuser), 0, "device space is all framebuffer, unprivileged");
+}
+
+/*
+ * The card's own output switch (a row with a capture path: the ZZ9000's register 0x1006).
+ * The X server's Set SVGA puts the card on RTG and Set Amiga on native video; with monsw the
+ * last close returns it to native video unless the console shows on it.  The Z3660 has no
+ * capture register: nothing at the ZZ9000's offsets moves.
+ */
+static void
+t_capture()
+{
+    struct zz9k_board *bp = &zz9k_boards[0];
+    int sw;
+
+    sw = SVGAMONITORSWITCH_SVGA;
+#if HOST_Z3660
+    *reg16(ZZ9K_REG_CX_CAPTURE) = 0x5555;
+    EQ(ioc(SVGAIOCSetMonitorSwitch, 64, &sw, sizeof sw, RW, &kroot), 0, "Set SVGA");
+    sw = SVGAMONITORSWITCH_Amiga;
+    EQ(ioc(SVGAIOCSetMonitorSwitch, 64, &sw, sizeof sw, RW, &kroot), 0, "Set Amiga");
+    EQ(zz9000close(0, RW, 0, &kroot), 0, "last close");
+    EQ(*reg16(ZZ9K_REG_CX_CAPTURE), 0x5555, "the Z3660: no capture register written");
+    EQ(bp->capture, -1, "and no switch state");
+#else
+    setmode(1280, 720);
+    *reg16(ZZ9K_REG_CX_CAPTURE) = 1;
+    EQ(ioc(SVGAIOCSetMonitorSwitch, 64, &sw, sizeof sw, RW, &kroot), 0, "Set SVGA");
+    EQ(*reg16(ZZ9K_REG_CX_CAPTURE), 0, "the card on RTG");
+    CHECK(*reg16(ZZ9K_REG_PAN_HI) == 0 && *reg16(ZZ9K_REG_PAN_LO) == 0 &&
+        *reg16(ZZ9K_REG_BLITTER_X2) == 1280, "the RTG pan written again, its row length first");
+    sw = SVGAMONITORSWITCH_Amiga;
+    EQ(ioc(SVGAIOCSetMonitorSwitch, 64, &sw, sizeof sw, RW, &kroot), 0, "Set Amiga");
+    EQ(*reg16(ZZ9K_REG_CX_CAPTURE), 1, "the card on native video");
+    CHECK(*reg16(ZZ9K_REG_PAN_HI) == 0x00e0 && *reg16(ZZ9K_REG_PAN_LO) == 0,
+        "the capture area's legacy pan first");
+    {
+        struct zz9k_pan pan;
+
+        sw = SVGAMONITORSWITCH_SVGA;
+        EQ(ioc(SVGAIOCSetMonitorSwitch, 64, &sw, sizeof sw, RW, &kroot), 0, "Set SVGA again");
+        pan.offset = 0x2800;
+        EQ(ioc(ZZ9KIOC_SETPAN, 64, &pan, sizeof pan, RW, &kroot), 0, "a client pans");
+        sw = SVGAMONITORSWITCH_Amiga;
+        EQ(ioc(SVGAIOCSetMonitorSwitch, 64, &sw, sizeof sw, RW, &kroot), 0, "Amiga");
+        sw = SVGAMONITORSWITCH_SVGA;
+        EQ(ioc(SVGAIOCSetMonitorSwitch, 64, &sw, sizeof sw, RW, &kroot), 0, "SVGA");
+        CHECK(*reg16(ZZ9K_REG_PAN_HI) == 0 && *reg16(ZZ9K_REG_PAN_LO) == 0x2800,
+            "back on RTG at the client's pan");
+    }
+#ifdef ZZ9K_MONSW
+    EQ(zz9000close(0, RW, 0, &kroot), 0, "the client's last close (X exits or dies)");
+    EQ(*reg16(ZZ9K_REG_CX_CAPTURE), 1, "the card back on native video");
+    EQ(bp->svga_switch, SVGAMONITORSWITCH_Amiga, "Get answers Amiga");
+    /* the console on this board keeps it */
+    EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_ENABLE, RW, &kroot), 0, "console on");
+    EQ(*reg16(ZZ9K_REG_CX_CAPTURE), 0, "the console on RTG");
+    EQ(zz9000close(0, RW, 0, &kroot), 0, "a last close with the console shown");
+    EQ(*reg16(ZZ9K_REG_CX_CAPTURE), 0, "the card stays on RTG for the console");
+    /* a console write switches only when the card is not on RTG */
+    *reg16(ZZ9K_REG_PAN_LO) = 0x7777;
+    cwrite("x");
+    EQ(*reg16(ZZ9K_REG_PAN_LO), 0x7777, "a console write on RTG writes no pan");
+    zz9k_set_switch_hw(bp, ZZ9K_SWITCH_CAPTURE);
+    cwrite("y");
+    EQ(*reg16(ZZ9K_REG_CX_CAPTURE), 0, "a console write brings the card back to RTG");
+    CHECK(*reg16(ZZ9K_REG_PAN_LO) == ((zz9k_con_top * zz9k_con_w * 2) & 0xffff),
+        "at the console's pan");
+    EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_DISABLE, RW, &kroot), 0, "console off");
+    EQ(*reg16(ZZ9K_REG_CX_CAPTURE), 1, "console off: native video");
+#endif
+#endif
 }
 
 /* the device space: the framebuffer from offset 0, never the register page */
@@ -240,7 +334,7 @@ t_devspace()
     u.uio_offset = 0; u.uio_resid = 8; u.uio_ubase = buf;
     EQ(zz9000read(0, &u, &kuser), 0, "read(2) of offset 0, unprivileged");
     CHECK(memcmp(buf, "FRAMEBUF", 8) == 0, "offset 0 is the framebuffer's first byte");
-#ifndef ZZ9K_TARGET_Z3660
+#if !HOST_Z3660
     EQ(info.fb_size, 0x00400000L - 0x10000L - 0x20000L, "Zorro II: 4 MB less registers and tail");
     CHECK(bp->fb == (char *)(WIN + 0x10000), "the framebuffer at +0x10000");
 #endif
@@ -265,7 +359,7 @@ t_allowlist()
     unsigned int off;
     int bad;
 
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     /* never: ZZ_CONFIG and the ethernet mailbox, either lane, either way */
     bad = 0;
     for (off = 0x104; off < 0x108; off += 2)
@@ -355,7 +449,7 @@ int w, h;
     EQ(ioc(ZZ9KIOC_SETMODE, 64, &m, sizeof m, RW, &kroot), 0, "SETMODE");
 }
 
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
 static int kcopyins;
 
 static void
@@ -372,7 +466,7 @@ t_blits()
     static struct zz9k_blit r[40];
     int i;
 
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     setmode(1920, 1080);
 #else
     setmode(1280, 720);
@@ -383,7 +477,7 @@ t_blits()
         r[i].width = 1920;
         r[i].height = 1080;
     }
-#ifndef ZZ9K_TARGET_Z3660
+#if !HOST_Z3660
     EQ(blits(r, 2), ENXIO, "no blitter on the ZZ9000 rows");
     return;
 #endif
@@ -426,7 +520,7 @@ t_blits()
             "the second group unreadable");
         EQ(krval, 8, "returns the first group's 8");
     }
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     kcopyins = 0;
     kcopyin_hook = other_process;
     EQ(blits(r, 9), 0, "nine records: three copyins");
@@ -470,10 +564,10 @@ t_console_enable()
     unsigned long kmap;
 
     setmode(1280, 720);
-    mode = *reg32(ZZ9K_Z3660_REG_MODE);
+    mode = regmode();
     khook = other_hook;         /* another driver has the console */
     EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_ENABLE, RW, &kroot), EBUSY, "the hook is taken");
-    EQ(*reg32(ZZ9K_Z3660_REG_MODE), mode, "the display is left as it was");
+    EQ(regmode(), mode, "the display is left as it was");
     EQ(zz9k_console_on, 0, "the console stays off");
     CHECK(khook == other_hook, "the other hook is kept");
     khook = 0;
@@ -673,7 +767,7 @@ t_console_scroll()
     zz9k_blit_on = 0;           /* registers draw nothing here: check the CPU paths */
     EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_ENABLE, RW, &kroot), 0, "console on");
     stride = zz9k_con_w * 2;
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     EQ(zz9k_con_ringh, 2 * zz9k_con_h + zz9k_console_font_h, "a pan ring on the Z3660");
 #else
     EQ(zz9k_con_ringh, zz9k_con_h, "no pan room in the ZZ9000's Zorro II window");
@@ -689,7 +783,7 @@ t_console_scroll()
         if (zz9k_con_top < lasttop)
             ++rebases;
         lasttop = zz9k_con_top;
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
         if (*reg32(ZZ9K_Z3660_REG_PAN) != (unsigned int)(zz9k_con_top * stride))
             ++bad;
         if (*reg32(ZZ9K_Z3660_REG_X2) != (unsigned int)zz9k_con_w)
@@ -714,7 +808,7 @@ t_console_scroll()
     CHECK(cell_is(zz9k_console_rows - 2, 0, 'M') && cell_is(zz9k_console_rows - 3, 0, 'L'),
         "the copy scroll in place");
     zz9k_blit_inuse = 0;
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     {
         struct zz9k_pan pan;
 
@@ -732,7 +826,7 @@ t_console_scroll()
     for (i = 0; i < 300; ++i)
         cwrite("blitter path\n");    /* the blitter paths run (they draw nothing here) */
     EQ(zz9k_blit_inuse, 0, "the in-use count returns to 0");
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     CHECK(rebases >= 2, "the ring went round at least twice");
 #endif
     EQ(iocv(ZZ9KIOC_CONSOLE, ZZ9K_CONSOLE_DISABLE, RW, &kroot), 0, "console off");
@@ -792,7 +886,7 @@ t_fill()
     EQ(krval, 0, "fills 0");
 }
 
-#ifdef ZZ9K_HOST_MAPPED
+#if defined(ZZ9K_HOST_MAPPED) && HOST_Z3660
 static void
 t_mapped()
 {
@@ -860,7 +954,7 @@ t_mapped_short()
 static void
 t_fixed()
 {
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     struct zz9k_board *bp = &zz9k_boards[0];
 
     /* a ZZ9000 configured as Zorro III in the list as well: refused, the next row tries */
@@ -897,7 +991,7 @@ t_getmodes()
     int i, bad;
 
     EQ(ioc(ZZ9KIOC_GETMODES, 64, &ms, sizeof ms, FREAD, &kuser), 0, "GETMODES, read-only");
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     EQ(ms.count, 17, "the Z3660 table");
     CHECK(ms.mode[12].width == 1280 && ms.mode[12].height == 800 &&
         ms.mode[12].id == ZZ9K_Z3660_MODE_1280x800, "1280x800, id 17");
@@ -944,7 +1038,7 @@ t_sensors()
     EQ(iocdev(0, ZZ9KIOC_SENSORS, &ss, sizeof ss, FREAD, &kuser), EINVAL, "size too small");
     EQ(sizeof ss, 72, "72 bytes");
     ss.size = sizeof ss;
-#ifdef ZZ9K_TARGET_Z3660
+#if HOST_Z3660
     *reg32(0x1d4) = 412; *reg32(0x220) = 3510; *reg32(0x22c) = 4567;
     *reg32(0x1dc) = 100; *reg32(0x1d8) = 180; *reg32(0x224) = 331;
     *reg32(0x228) = 502; *reg32(0x230) = 499; *reg32(0x1f8) = 50;
@@ -1064,12 +1158,13 @@ char **argv;
 #else
     zz9000init();
 #endif
-#ifdef ZZ9K_HOST_MAPPED
+#if defined(ZZ9K_HOST_MAPPED) && HOST_Z3660
     t_mapped();
     t_mapped_short();           /* ends mapped with 8 MiB, for the console tests below */
 #endif
     t_privilege();
     t_devspace();
+    t_capture();
     t_allowlist();
     t_band();
     t_blits();
