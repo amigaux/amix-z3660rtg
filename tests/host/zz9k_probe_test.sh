@@ -80,10 +80,52 @@ for a in z3660 zz9000; do
 	check "no board on either unit, $a: exit 1, no output" "$rc:$so$se" "1:"
 done
 
-for args in "" "zz9001" "Z3660" "z3660 zz9000" "-h"; do
+# zz9000 with a unit: only that unit is asked
+for u in 0 1; do
+	run z3660 empty zz9000 $u
+	check "Z3660 alone, zz9000 $u: exit 1, no output" "$rc:$so$se" "1:"
+	check "Z3660 alone, zz9000 $u: unit $u asked only" "$calls" "$(asked $u)"
+done
+run z2 empty zz9000 0
+check "ZZ9000 Zorro II alone, zz9000 0: exit 0" "$rc" 0
+check "ZZ9000 Zorro II alone, zz9000 0: the node, no modes" "$so" "node /dev/zz9000;"
+check "ZZ9000 Zorro II alone, zz9000 0: unit 0 asked only" "$calls" "$(asked 0)"
+run z2 empty zz9000 1
+check "ZZ9000 Zorro II alone, zz9000 1: exit 1, no output" "$rc:$so$se" "1:"
+check "ZZ9000 Zorro II alone, zz9000 1: unit 1 asked only" "$calls" "$(asked 1)"
+run empty z2 zz9000 1
+check "ZZ9000 Zorro II on unit 1, zz9000 1: /dev/zz9001" "$rc:$so" "0:node /dev/zz9001;"
+check "ZZ9000 Zorro II on unit 1, zz9000 1: unit 1 asked only" "$calls" "$(asked 1)"
+run z3 empty zz9000 0
+check "ZZ9000 Zorro III alone, zz9000 0: exit 0" "$rc" 0
+check "ZZ9000 Zorro III alone, zz9000 0: the node and the modes line" "$so" \
+	"node /dev/zz9000;modes $MODES 1920x1080;"
+check "ZZ9000 Zorro III alone, zz9000 0: unit 0 asked only" "$calls" "$(asked 0)"
+run z3 empty zz9000 1
+check "ZZ9000 Zorro III alone, zz9000 1: exit 1, no output" "$rc:$so$se" "1:"
+run z3660 z2 zz9000 0
+check "both, zz9000 0: exit 1 (unit 0 is the Z3660), no output" "$rc:$so$se" "1:"
+check "both, zz9000 0: unit 0 asked only" "$calls" "$(asked 0)"
+run z3660 z2 zz9000 1
+check "both, zz9000 1: exit 0" "$rc" 0
+check "both, zz9000 1: /dev/zz9001" "$so" "node /dev/zz9001;"
+check "both, zz9000 1: unit 1 asked only" "$calls" "$(asked 1)"
+run z3660 z3 zz9000 1
+check "Z3660 and a Zorro III ZZ9000, zz9000 1: /dev/zz9001 and modes" "$rc:$so" \
+	"0:node /dev/zz9001;modes $MODES 1920x1080;"
+for u in 0 1; do
+	run nodev nodev zz9000 $u
+	check "no unit, zz9000 $u: exit 1, no output" "$rc:$so$se" "1:"
+	check "no unit, zz9000 $u: opens unit $u only" "$calls" "$(refused $u)"
+	run empty empty zz9000 $u
+	check "no board, zz9000 $u: exit 1, no output" "$rc:$so$se" "1:"
+done
+
+for args in "" "zz9001" "Z3660" "z3660 zz9000" "-h" "z3660 0" "z3660 1" "zz9000 2" \
+	"zz9000 -1" "zz9000 01" "zz9000 x" "zz9000 0 1" "zz9000 1 0"; do
 	run z3660 z2 $args
 	check "bad argument [$args]: exit 2" "$rc" 2
-	check "bad argument [$args]: usage on stderr only" "$so|$se" "|usage: zz9k_probe z3660|zz9000"
+	check "bad argument [$args]: usage on stderr only" "$so|$se" "|usage: zz9k_probe z3660|zz9000 [0|1]"
 	check "bad argument [$args]: no device call" "$calls" ""
 done
 

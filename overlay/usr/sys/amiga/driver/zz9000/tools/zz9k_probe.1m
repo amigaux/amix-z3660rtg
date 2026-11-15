@@ -6,6 +6,7 @@ zz9k_probe \- say which board is behind the Z3660/ZZ9000 RTG driver
 .B zz9k_probe z3660
 .br
 .B zz9k_probe zz9000
+.RB [ 0 | 1 ]
 .SH DESCRIPTION
 .B zz9k_probe
 is the probe of the RTG driver's card files in
@@ -58,9 +59,17 @@ modes 1024x768 640x480 800x600 1280x720 1280x1024 1920x800 1920x1080
 .IP
 A Zorro II card's framebuffer (its 4 MB window less the register page and
 the firmware's tail, 3.8 MB) holds 1920x800 at 16 bits but not 1920x1080.
+.TP
+.BR "zz9000 0" ", " "zz9000 1"
+The same for that unit only: exit 0 and print its node (and, in a Zorro
+III slot, its modes) when that unit is a ZZ9000 card; otherwise exit 1 with
+no output.
+Only that unit's information node is opened.
+This is for card files, which cannot pass the node through and so need one
+file per unit.
 .PP
 It prints nothing else and never writes to its standard error unless the
-argument is wrong.
+arguments are wrong.
 It returns at once, and is safe to run as any user, with no board fitted
 and inside a
 .BR chroot (1M).
