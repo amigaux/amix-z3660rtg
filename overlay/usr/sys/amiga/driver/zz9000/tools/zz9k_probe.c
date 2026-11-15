@@ -7,6 +7,7 @@
  *   zz9k_probe z3660     exit 0 when unit 0 is the Z3660's RTG
  *   zz9k_probe zz9000    exit 0 when a unit is an MNT ZZ9000; prints its node
  *                        (and, in a Zorro III slot, its modes)
+ *   zz9k_probe zz9000 N  the same for unit N (0 or 1) only
  *
  * Each unit is asked through its information node (0444, any user) with
  * ZZ9KIOC_GETINFO only: open read-only, one ioctl, close.  The driver answers
@@ -68,8 +69,19 @@ char **argv;
         printf("node %s\n", mainnode[0]);
         return 0;
     }
-    if (argc == 2 && strcmp(argv[1], "zz9000") == 0) {
-        for (u = 0; u < NUNITS; ++u) {
+    if ((argc == 2 || argc == 3) && strcmp(argv[1], "zz9000") == 0) {
+        int lo = 0, hi = NUNITS;
+
+        if (argc == 3) {
+            if (strcmp(argv[2], "0") == 0)
+                lo = 0;
+            else if (strcmp(argv[2], "1") == 0)
+                lo = 1;
+            else
+                goto usage;
+            hi = lo + 1;
+        }
+        for (u = lo; u < hi; ++u) {
             if (!getinfo(u, &in))
                 continue;
             if (ZZ9K_IS_ZZ9000_Z2(&in)) {
@@ -84,6 +96,7 @@ char **argv;
         }
         return 1;
     }
-    fprintf(stderr, "usage: zz9k_probe z3660|zz9000\n");
+usage:
+    fprintf(stderr, "usage: zz9k_probe z3660|zz9000 [0|1]\n");
     return 2;
 }
