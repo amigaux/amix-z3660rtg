@@ -130,7 +130,9 @@ The ZZ9000's blitter is not used.
 0 (the default): the Z3660 is found through its AutoConfig entry, as on a
 real machine; 1: its fixed base at
 .B 0x10000000
-is also tried, which emulators without that entry need.
+is also tried, which emulators without that entry need, but only when the
+AutoConfig list holds the Z3660 (manufacturer 0x144B, product 1): on a machine
+without one the base is not read, and the console says so.
 .TP
 .B kvfb
 MiB of the framebuffer of a board above 1 GB mapped for the kernel, 1 to 46;

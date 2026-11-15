@@ -32,7 +32,7 @@ ZZ9000, `monswctl status` reads native when X exits and RTG again at the next co
 | Name | Default | Meaning |
 |---|---|---|
 | `blit` | 1 | use the card's blitter where the board's row has it (the Z3660; not the ZZ9000) |
-| `fixed` | 0 | also look for the Z3660 at its fixed base (amiberry's Z3660 has no AutoConfig entry) |
+| `fixed` | 0 | also look for the Z3660 RTG at its fixed base (amiberry's RTG stand-in has no AutoConfig entry); read only when the AutoConfig list holds the Z3660 (0x144B/0x01), so never on a machine without one |
 | `kvfb` | 0 | MiB of a framebuffer above 1 GB mapped for the kernel; 0 = the line's default, 8 on k46, 2 on k30; a request the kernel cannot meet halves until it can |
 | `maxarea` | 8192 | pixels per blitter band (0 = the default) |
 
