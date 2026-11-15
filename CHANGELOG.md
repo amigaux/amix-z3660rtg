@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-15 — the emulator rows' findings; module 1.1.2-1 not yet published (06a1198..ee17d34)
+
+The fixed base 0x10000000 is read only when the AutoConfig list holds the Z3660, so `fixed=1` on a machine without one
+costs no bus timeout and reads no other card's memory. On the 68040/060 line the 8 MiB `kvfb` request halves to 4 MiB,
+since the kernel's arena is shared with its heap: documented with its effect (the 1920x800 console scrolls by copying).
+A known issue is noted: on the 68030 line a program drawing into a board mapped above 1 GB can be killed by the
+kernel's bus-error probe. zz9k_test treats Zorro III and the Z3660 as supported boards and writes unbuffered. INSTALL
+shows the four device nodes, 0660 and 0444 root sys. README explains two boards sharing the one monitor-switch line.
+A host test checks that each attach line is printed once. The Z3660 register-write traces are unchanged.
+
 ## 2026-11-15 — real MNT ZZ9000 cards; module 1.1.2-1 (63644c7..a23d281)
 
 The ZZ9000 Zorro II device no longer maps its register page, which holds the firmware-update, SD, USB, ethernet and
