@@ -15,7 +15,7 @@ One object serves every board the driver knows, found at run time:
 
 | Board | Found by | `GETINFO` zorro/product |
 |---|---|---|
-| The Z3660's onboard RTG | its AutoConfig entry (`0x144b`/1), or its fixed base at `0x10000000` with `fixed=1` | 3 / 1 |
+| The Z3660's onboard RTG | its AutoConfig entry (`0x144b`/1), or its fixed base at `0x10000000` with `fixed=1` (the emulated 68030 modes) | 3 / 1 |
 | An MNT ZZ9000, Zorro II | AutoConfig `0x6d6e`/3 | 2 / 3 |
 | An MNT ZZ9000, Zorro III | AutoConfig `0x6d6e`/4; above 1 GB through kernel mappings | 3 / 4 |
 
@@ -36,7 +36,7 @@ ZZ9000, `monswctl status` reads native when X exits and RTG again at the next co
 | Name | Default | Meaning |
 |---|---|---|
 | `blit` | 1 | use the card's blitter where the board's row has it (the Z3660; not the ZZ9000) |
-| `fixed` | 0 | also look for the Z3660 RTG at its fixed base (amiberry's RTG stand-in has no AutoConfig entry); read only when the AutoConfig list holds the Z3660 (0x144B/0x01), so never on a machine without one |
+| `fixed` | 0 | also look for the Z3660 RTG at its fixed base (a Z3660 running its emulated 68030, and amiberry's RTG stand-in, list no AutoConfig entry for it); read only when the AutoConfig list holds a Z3660 identity (manufacturer 0x144B, product 1, 2 or 3), so never on a machine without one |
 | `kvfb` | 0 | MiB of a framebuffer above 1 GB mapped for the kernel; 0 = the line's default, 8 on k46, 2 on k30; a request the kernel cannot meet halves until it can |
 | `maxarea` | 8192 | pixels per blitter band (0 = the default) |
 

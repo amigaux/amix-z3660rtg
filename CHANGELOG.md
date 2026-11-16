@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-16 — fixed=1 on the Z3660's emulated 68030; module 1.1.2-2 (604c723..f9273a5)
+
+With `fixed=1` the fixed base 0x10000000 is now read when the AutoConfig list holds any of the Z3660 firmware's identities: manufacturer 0x144B with product 1 (the RTG), 2 (its Zorro III RAM) or 3 (its Zorro II board). When the Z3660 runs its emulated 68030 (UAE_030_MMU, AutoConfig RTG off), the list holds only products 2 and 3. 1.1.2-1 required product 1, so it did not attach the RTG there (seen on an A4000T, firmware 1.03 beta 21); 1.1.1-4 had attached it. A machine with no 0x144B entry, a ZZ9000-only one included, still never has the fixed base read. The console line now says what it looked for. New host tests cover the 68030 list, each product on its own, an unknown product 4, the empty list and a ZZ9000-only list.
+
 ## 2026-11-15 — zz9k_probe takes a unit (a7b0509)
 
 `zz9k_probe zz9000 0|1` asks one unit only: it opens only that unit's information node, exits 0 with `node /dev/zz900N` when the unit is a ZZ9000 (adding the `modes` line for Zorro III), and otherwise exits 1 with no output, so each display.d card file can cover one unit. `zz9000` with no unit and `z3660` work as before; any other form gives usage and exit 2.

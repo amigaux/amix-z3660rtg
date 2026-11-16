@@ -1210,11 +1210,61 @@ t_fixed()
     zz9k_noboard[0] = 0;
     klogn = 0;
     EQ(zz9k_probe(0), 0, "nor with fixed=1 on a machine without the board");
-    CHECK(strstr(klog, "(fixed base) at 0x10000000 not probed") != 0 &&
-        strstr(klog, "no Z3660 RTG (fixed base)") == 0, "the fixed base is not read, and it says so");
+    CHECK(strstr(klog, "(fixed base) at 0x10000000 not probed: no Z3660 in the AutoConfig list "
+        "(0x144b product 1, 2 or 3)") != 0 &&
+        strstr(klog, "no Z3660 RTG (fixed base)") == 0,
+        "empty list: the fixed base is not read, and it says what it looked for");
     klogn = 0;
     EQ(zz9k_probe(0), 0, "a failed probe is remembered");
     EQ(klogn, 0, "and says nothing the second time");
+
+    /*
+     * The Z3660 with its emulated 68030 (UAE_030_MMU, AutoConfig RTG NO, as the A4000T
+     * lists it): its Zorro III RAM 0x144b/2 and its Zorro II board 0x144b/3, no 0x144b/1;
+     * the RTG hard-mapped at 0x10000000.
+     */
+    kboards[0].pc = ZZ9K_Z3660_RAM_PC;
+    kboards[0].base = 0x40000000L;
+    kboards[0].size = 0x10000000L;
+    kboards[1].pc = ZZ9K_Z3660_Z2_PC;
+    kboards[1].base = 0x00e90000L;
+    kboards[1].size = 0x00010000L;
+    zz9k_fixed_on = 0;
+    bp->base = 0;
+    zz9k_noboard[0] = 0;
+    klogn = 0;
+    klog[0] = 0;
+    EQ(zz9k_probe(0), 0, "68030 list (0x144b/2 + /3) without fixed=1: no board, as before");
+    CHECK(strstr(klog, "not probed") == 0, "and no fixed-base line");
+    zz9k_fixed_on = 1;
+    zz9k_noboard[0] = 0;
+    klogn = 0;
+    klog[0] = 0;
+    EQ(zz9k_probe(0), 1, "68030 list (0x144b/2 + /3) with fixed=1: the fixed base is probed");
+    CHECK(bp->bt && bp->bt->autocon_pc == 0 && bp->phys == (long)ZZ9K_Z3660_BASE,
+        "attached by the fixed row at 0x10000000");
+    CHECK(strstr(klog, "Z3660 RTG (fixed base) at 0x10000000") != 0 &&
+        strstr(klog, "not probed") == 0, "the attach line, no refusal");
+    kboards[1].pc = 0;          /* the Zorro II board alone (Z3 RAM AutoConfig off) */
+    kboards[0].pc = ZZ9K_Z3660_Z2_PC;
+    kboards[0].base = 0x00e90000L;
+    kboards[0].size = 0x00010000L;
+    bp->base = 0;
+    zz9k_noboard[0] = 0;
+    EQ(zz9k_probe(0), 1, "68030 list, 0x144b/3 alone, fixed=1: probed");
+    kboards[0].pc = ZZ9K_Z3660_RAM_PC;  /* the RAM alone (SCSI AutoConfig off) */
+    kboards[0].base = 0x40000000L;
+    kboards[0].size = 0x10000000L;
+    bp->base = 0;
+    zz9k_noboard[0] = 0;
+    EQ(zz9k_probe(0), 1, "68030 list, 0x144b/2 alone, fixed=1: probed");
+    kboards[0].pc = 0x144b0004UL;       /* not an identity the firmware emits */
+    bp->base = 0;
+    zz9k_noboard[0] = 0;
+    klogn = 0;
+    klog[0] = 0;
+    EQ(zz9k_probe(0), 0, "0x144b/4 alone, fixed=1: not probed");
+    CHECK(strstr(klog, "not probed: no Z3660 in the AutoConfig list") != 0, "and it says so");
     /* amiberry's Z3660: the accelerator's entry listed but not the RTG, the RTG at the fixed base */
     kboards[0].pc = ZZ9K_Z3660_PRODUCT_PC;
     kboards[0].base = (long)(WIN + 0x4000000UL);
@@ -1228,6 +1278,24 @@ t_fixed()
     bp->base = 0;
     EQ(zz9k_probe(0), 0, "and only on an AGA machine");
     *(volatile unsigned short *)0xdff004UL = 0x2300;
+#elif defined(ZZ9K_TARGET_Z3660)
+    /* a ZZ9000-only machine (0x6d6e, no 0x144b) with fixed=1: the card at 0x10000000 here */
+    struct zz9k_board *bp = &zz9k_boards[0];
+    unsigned long pc = bp->bt ? bp->bt->autocon_pc : 0;
+
+    bp->base = 0;
+    zz9k_noboard[0] = 0;
+    zz9k_fixed_on = 1;
+    klogn = 0;
+    klog[0] = 0;
+    EQ(zz9k_probe(0), 1, "ZZ9000-only list with fixed=1: the card attaches");
+    CHECK(bp->bt && pc != 0 && bp->bt->autocon_pc == pc,
+        "by its own AutoConfig row, not the Z3660's fixed base");
+    CHECK(strstr(klog, "Z3660 RTG (fixed base) at 0x10000000 not probed: no Z3660 in the "
+        "AutoConfig list (0x144b product 1, 2 or 3)") != 0 &&
+        strstr(klog, "no Z3660 RTG (fixed base)") == 0,
+        "the fixed base is not read, and it says what it looked for");
+    zz9k_fixed_on = 0;
 #endif
 }
 

@@ -377,8 +377,18 @@ struct zz9k_conputs {
  * (memorymap.h FRAMEBUFFER_ADDRESS) and the AmigaOS driver uses 46 MB of it
  * (z3660-drivers/rtg/gfx.c).  With autoconfig_rtg YES the combo is a Zorro
  * III board, manufacturer 0x144b product 1, above the identity map.
+ *
+ * The firmware's other AutoConfig identities, on the same manufacturer (the
+ * only one the card presents; no other known card uses it): product 2, its
+ * 256 MB Zorro III RAM (autoconfig_ram
+ * YES), and product 3, its 64 kB Zorro II board (the SCSI boot board), in
+ * both the FPGA's chains (real CPU) and the emulator's (cpu_emulator.cpp
+ * read_autoconfig_z2/z3).  Either one listed means a Z3660 whose RTG is
+ * listed as product 1 or else hard-mapped at 0x10000000.
  */
 #define ZZ9K_Z3660_PRODUCT_PC   0x144b0001UL
+#define ZZ9K_Z3660_RAM_PC       0x144b0002UL
+#define ZZ9K_Z3660_Z2_PC        0x144b0003UL
 #define ZZ9K_Z3660_BASE         0x10000000UL
 #define ZZ9K_Z3660_WINDOW       0x08000000UL
 #define ZZ9K_Z3660_REG_SIZE     0x00001000UL  /* GETREG/SETREG bound; the page is not in the device space */
