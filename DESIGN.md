@@ -371,6 +371,18 @@ Rows compiled in (**corrected on metal, 2026-09-18** — see the box below):
 > of ending the probe, which is the sibling drivers' multi-method shape and makes
 > `-DZZ9K_BENCH_Z3660` unnecessary (the define is accepted and ignored).
 
+**When the fixed row may read (2026-11-16).** With `fixed=1` the fixed base is read only when the
+boot record's AutoConfig list holds one of the firmware's three identities, manufacturer `0x144B`
+product 1 (the RTG), 2 (its Zorro III RAM) or 3 (its Zorro II board), a read with no bus cycle.
+The firmware presents no other identity, and whenever product 1 is not presented
+(`autoconfig_rtg NO`) it hard-maps the RTG at `0x10000000` in every boot mode
+(`cpu_emulator.cpp` `reset_autoconfig`, `read_autoconfig_z2/z3`; the FPGA chains, `z3660.v`).
+Products 2 and 3 are needed because with the emulated 68030 (`UAE_030_MMU`) the list holds
+only them, with no product 1 (the A4000T, firmware 1.03 beta 21: `144b:02` at `0x40000000`, `144b:03` at
+`0x00E90000`); requiring product 1 (06a1198) refused that machine. A machine with no `0x144B`
+entry, a ZZ9000-only one among them, never has the fixed base read, and the console says what
+was looked for.
+
 ### 4.3 What stays identical
 
 `/dev/zz9000` c 49 0, every ioctl number and struct, `Xzz9000`, `zz9k_test`'s command set,

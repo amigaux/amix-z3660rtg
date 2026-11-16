@@ -500,8 +500,9 @@ long zz9k_blit_maxarea = ZZ9K_BLIT_MAXAREA_DEFAULT;
  * fixed-base rows, whose board has no AutoConfig entry of its own.  Off by default: such a
  * probe reads a fixed address, and where nothing answers there it costs a bus timeout or hits
  * another card's memory.  Even when set, the fixed base is read only on a machine whose
- * AutoConfig list holds the board (zz9k_board_listed).  A real Z3660 is found through its
- * AutoConfig entry.  The bench build (-DZZ9K_BENCH_Z3660) turns it on for amiberry's Z3660
+ * AutoConfig list holds a Z3660 (zz9k_board_listed).  A real Z3660 with the 68060 is found
+ * through its AutoConfig entry; with its emulated 68030 the RTG has none and needs this.
+ * The bench build (-DZZ9K_BENCH_Z3660) turns it on for amiberry's Z3660
  * stand-in.
  */
 #ifdef ZZ9K_BENCH_Z3660
@@ -543,7 +544,8 @@ static struct zz9k_boardtab zz9k_boardtab[] = {
       zz9k_sens_z3660 },
     /*
      * The same board reached by its fixed base, for a machine whose
-     * AutoConfig table does not list it.  Device space is the framebuffer
+     * AutoConfig table does not list it (the Z3660's emulated 68030 lists
+     * only its RAM and Zorro II board; zz9k_board_listed).  Device space is the framebuffer
      * alone (physically at +0x200000): the register page also carries the
      * ethernet driver's doorbells, so it is never mapped to userland;
      * registers are reached through GETREG/SETREG only.
@@ -1011,13 +1013,23 @@ struct zz9k_boardtab *bt;
 }
 
 /*
- * The machine has row bt's board: a row of the same board with an AutoConfig identity finds
- * it in the list (a read of the boot record, no bus cycle).  A fixed-base row is probed only
- * then, so `fixed` set on a machine without a Z3660 never reads an address nobody decodes
- * (a bus timeout, or another card's memory).  A Z3660 is always listed: on real hardware its
- * board, under amiberry the accelerator's entry beside the RTG stand-in.  The bench build
- * (-DZZ9K_BENCH_Z3660) keeps the old rule for a stand-in without any entry.
+ * The machine has row bt's board, read from the boot record's AutoConfig list (no bus
+ * cycle): a row of the same board with an AutoConfig identity finds it there, or, for the
+ * Z3660, one of the firmware's other identities does (zz9000.h ZZ9K_Z3660_RAM_PC,
+ * ZZ9K_Z3660_Z2_PC).  A fixed-base row is probed only then, so `fixed` set on a machine
+ * without a Z3660 never reads an address nobody decodes (a bus timeout, or another card's
+ * memory).  A Z3660 lists at least one of them unless all its AutoConfig is off: with the
+ * real 68060 the extended ROM's entry for the RTG (product 1), with its emulated 68030 the
+ * RAM (2) and the Zorro II board (3) but not the hard-mapped RTG, and under amiberry the
+ * accelerator's entry (1) beside the RTG stand-in.  The bench build (-DZZ9K_BENCH_Z3660)
+ * keeps the old rule for a stand-in without any entry.
  */
+#ifdef ZZ9K_TARGET_Z3660
+#define ZZ9K_LISTED_WANT "no Z3660 in the AutoConfig list (0x144b product 1, 2 or 3)"
+#else
+#define ZZ9K_LISTED_WANT "the board is not in the AutoConfig list"
+#endif
+
 static int
 zz9k_board_listed(bt)
 struct zz9k_boardtab *bt;
@@ -1027,11 +1039,21 @@ struct zz9k_boardtab *bt;
 #else
     struct zz9k_boardtab *t;
     long b, s;
+#ifdef ZZ9K_TARGET_Z3660
+    static unsigned long kin[] = { ZZ9K_Z3660_RAM_PC, ZZ9K_Z3660_Z2_PC };
+    int i;
+#endif
 
     for (t = zz9k_boardtab; t < &zz9k_boardtab[ZZ9K_NBOARDTAB]; ++t)
         if (t->autocon_pc && t->product == bt->product && t->zorro == bt->zorro &&
             t->regoff == bt->regoff && autocon(t->autocon_pc, 0, &b, &s))
             return 1;
+#ifdef ZZ9K_TARGET_Z3660
+    if (bt->zorro == 3 && bt->product == ZZ9K_PRODUCT_Z3660)
+        for (i = 0; i < sizeof kin / sizeof kin[0]; ++i)
+            if (autocon(kin[i], 0, &b, &s))
+                return 1;
+#endif
     return 0;
 #endif
 }
@@ -1105,8 +1127,8 @@ zz9k_scan()
             base = (long)bt->fixed_base;
             size = (long)bt->fixed_size;
             if (!zz9k_board_listed(bt)) {
-                printf("zz9000: %s at 0x%x not probed: the board is not in the AutoConfig list\n",
-                    bt->name, (unsigned int)base);
+                printf("zz9000: %s at 0x%x not probed: %s\n",
+                    bt->name, (unsigned int)base, ZZ9K_LISTED_WANT);
                 continue;
             }
             if (!zz9k_held(base))
