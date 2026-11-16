@@ -5,6 +5,9 @@
 # units (README.md, zz9000.7).  kvfb: MiB of a board above 1 GB mapped for the kernel,
 # 0 = the line's default (8 on k46, 2 on k30; a ZZ9000's 1920x800 console needs 3 on k30).
 # A request the kernel cannot meet halves: on k46 the arena is 8 MiB, shared, so 4 is typical.
+# fixed: the Z3660 RTG's fixed base 0x10000000; 0 (auto) reads it when the AutoConfig list
+# holds a Z3660 (0x144b product 1, 2 or 3) whose RTG no entry gave, 1 the same and says so
+# when no Z3660 is listed, -1 never reads it.
 name=z3660rtg
 class=demand
 majors=c:49
@@ -12,6 +15,6 @@ depend=monsw
 unload=allowed
 desc=Z3660/ZZ9000 RTG framebuffer
 param=blit:bool:1
-param=fixed:bool:0
+param=fixed:int:0:-1:1
 param=kvfb:int:0:0:46
 param=maxarea:int:8192:0:3686400
