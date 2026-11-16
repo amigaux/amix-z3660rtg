@@ -1,5 +1,5 @@
 .\" Copyright (c) 2026 Jussi Alanärä.  SPDX-License-Identifier: MIT
-.TH ZZ9000 7 "15 November 2026" "amix-z3660rtg" "Devices"
+.TH ZZ9000 7 "16 November 2026" "amix-z3660rtg" "Devices"
 .SH NAME
 zz9000 \- RTG framebuffer of the Z3660 and of MNT ZZ9000 cards
 .SH SYNOPSIS
@@ -127,13 +127,20 @@ uses it (the Z3660); 0: the CPU.
 The ZZ9000's blitter is not used.
 .TP
 .B fixed
-0 (the default): the Z3660 is found through its AutoConfig entry, as with its
-real 68060; 1: its fixed base at
-.B 0x10000000
-is also tried, which a Z3660 running its emulated 68030 and emulators without
-that entry need, but only when the AutoConfig list holds a Z3660 identity
-(manufacturer 0x144B, product 1, 2 or 3): on a machine without one the base is
-not read, and the console says what it looked for.
+How the Z3660's RTG is looked for at its fixed base,
+.BR 0x10000000 .
+0 (the default, automatic): when the AutoConfig list holds a Z3660 identity
+(manufacturer 0x144B, product 1, 2 or 3) and no entry gave its RTG, the fixed
+base is read, guarded by
+.BR bprobe ,
+and the RTG attached if it answers; a board that does not is reported on one
+console line.
+A Z3660 running its emulated 68030 lists only products 2 and 3 and is found
+this way with no setting; with its real 68060 the RTG usually has an entry.
+On a machine with no Z3660 listed the base is not read and nothing is printed.
+1: the same, and a machine with no Z3660 listed is told the base was not
+probed.
+\-1: the fixed base is never read.
 .TP
 .B kvfb
 MiB of the framebuffer of a board above 1 GB mapped for the kernel, 1 to 46;

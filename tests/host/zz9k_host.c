@@ -1053,8 +1053,27 @@ t_mapped_short()
     kmap_regsfail = 1;
     bp->base = 0;
     calls = kunmap_calls;
+    /*
+     * autoconfig_rtg YES: nothing decodes the fixed base.  A real 68060 takes a bus error
+     * there (Buster's timeout), which bprobe catches; an emulated CPU reads all ones.
+     */
+    kbuserr_lo = WIN;
+    kbuserr_hi = WIN + WINSZ;
+    klogn = 0;
+    klog[0] = 0;
     EQ(zz9k_probe(0), 0, "the register page cannot be mapped: no board");
     EQ(kmapped, 0, "nothing left mapped");
+    CHECK(strstr(klog, "no Z3660 RTG (fixed base) at 0x10000000: bus error") != 0,
+        "auto went on to the fixed base, guarded: the bus error is caught and said");
+    kbuserr_lo = kbuserr_hi = 0;
+    *reg32(ZZ9K_Z3660_REG_FW_VERSION) = 0xffffffffU;
+    zz9k_noboard[0] = 0;
+    bp->base = 0;
+    klogn = 0;
+    klog[0] = 0;
+    EQ(zz9k_probe(0), 0, "nor where the fixed base reads all ones (an emulated CPU)");
+    CHECK(strstr(klog, "no Z3660 RTG (fixed base) at 0x10000000\n") != 0, "and says so");
+    *reg32(ZZ9K_Z3660_REG_FW_VERSION) = 0x0103;
     kmap_regsfail = 0;
     zz9k_noboard[0] = 0;
     bp->base = 0;
@@ -1186,6 +1205,40 @@ t_attach_once()
     CHECK(n > 0 && !dup, "every attach line printed once");
 }
 
+/* unit 0 (and unit 1 with both) emptied for a fresh probe, the log and bprobe count cleared */
+static void
+reprobe(both)
+int both;
+{
+    zz9k_boards[0].base = 0;
+    zz9k_noboard[0] = 0;
+    if (both) {
+        zz9k_boards[1].base = 0;
+        zz9k_noboard[1] = 0;
+    }
+    klogn = 0;
+    klog[0] = 0;
+    kbprobe_calls = 0;
+}
+
+/* the log's lines holding s (all its lines when s is 0) */
+static int
+klines(s)
+char *s;
+{
+    char *p, *q;
+    int n;
+
+    for (n = 0, p = klog; *p; p = q + 1) {
+        q = strchr(p, '\n');
+        if (!q)
+            q = p + strlen(p) - 1;
+        if (!s || (strstr(p, s) && strstr(p, s) <= q))
+            ++n;
+    }
+    return n;
+}
+
 /* last: re-probes the board */
 static void
 t_fixed()
@@ -1203,13 +1256,15 @@ t_fixed()
     kboards[1].pc = 0;
 
     kboards[0].pc = 0;          /* a machine without a Z3660: the board is not listed */
-    bp->base = 0;
-    zz9k_fixed_on = 0;
-    EQ(zz9k_probe(0), 0, "no fixed-base probe by default");
-    zz9k_fixed_on = 1;
-    zz9k_noboard[0] = 0;
-    klogn = 0;
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "auto, nothing listed: no board");
+    EQ(kbprobe_calls, 0, "and the fixed base is not read");
+    CHECK(strstr(klog, "fixed base") == 0, "nor named on the console");
+    zz9k_fixed_on = ZZ9K_FIXED_ON;
+    reprobe(0);
     EQ(zz9k_probe(0), 0, "nor with fixed=1 on a machine without the board");
+    EQ(kbprobe_calls, 0, "fixed=1, nothing listed: not read");
     CHECK(strstr(klog, "(fixed base) at 0x10000000 not probed: no Z3660 in the AutoConfig list "
         "(0x144b product 1, 2 or 3)") != 0 &&
         strstr(klog, "no Z3660 RTG (fixed base)") == 0,
@@ -1229,55 +1284,163 @@ t_fixed()
     kboards[1].pc = ZZ9K_Z3660_Z2_PC;
     kboards[1].base = 0x00e90000L;
     kboards[1].size = 0x00010000L;
-    zz9k_fixed_on = 0;
-    bp->base = 0;
-    zz9k_noboard[0] = 0;
-    klogn = 0;
-    klog[0] = 0;
-    EQ(zz9k_probe(0), 0, "68030 list (0x144b/2 + /3) without fixed=1: no board, as before");
-    CHECK(strstr(klog, "not probed") == 0, "and no fixed-base line");
-    zz9k_fixed_on = 1;
-    zz9k_noboard[0] = 0;
-    klogn = 0;
-    klog[0] = 0;
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+    reprobe(0);
+    EQ(zz9k_probe(0), 1, "auto, 68030 list (0x144b/2 + /3), no parameter: the RTG attaches");
+    CHECK(bp->bt && bp->bt->autocon_pc == 0 && bp->phys == (long)ZZ9K_Z3660_BASE,
+        "auto: by the fixed row at 0x10000000");
+    EQ(kbprobe_calls, 1, "auto: the read guarded by one bprobe");
+    EQ(kbprobe_last, ZZ9K_Z3660_BASE + ZZ9K_Z3660_REG_FW_VERSION, "of the FW_VERSION register");
+    CHECK(strstr(klog, "Z3660 RTG (fixed base) at 0x10000000 size") != 0 &&
+        strstr(klog, "not probed") == 0, "auto: the attach line, no refusal");
+    /* the board does not answer as the RTG: no attach, one line */
+    *reg32(ZZ9K_Z3660_REG_FW_VERSION) = 0;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "auto, 68030 list, FW_VERSION 0: no board");
+    EQ(klines("zz9000: no Z3660 RTG (fixed base) at 0x10000000\n"), 1, "one line says so");
+#ifdef ZZ9K_HOST_BOTH
+    EQ(klines(0), 1, "and nothing else (unit 1 holds the ZZ9000)");
+#else
+    EQ(klines(0), 2, "and only the probe's own 'no supported board found' beside it");
+#endif
+    *reg32(ZZ9K_Z3660_REG_FW_VERSION) = 0x0203;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "auto, 68030 list, firmware major 2: no board");
+    *reg32(ZZ9K_Z3660_REG_FW_VERSION) = 0xffffffffU;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "auto, 68030 list, all ones (a dummy bank): no board");
+    *reg32(ZZ9K_Z3660_REG_FW_VERSION) = 0x0103;
+    /* nothing decodes the base (a real 68060): bprobe catches the bus error */
+    kbuserr_lo = WIN;
+    kbuserr_hi = WIN + WINSZ;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "auto, 68030 list, a bus error at the fixed base: no board");
+    EQ(klines("zz9000: no Z3660 RTG (fixed base) at 0x10000000: bus error\n"), 1,
+        "one line says so");
+    kbuserr_lo = kbuserr_hi = 0;
+    /* fixed=1 on the same list, as in 1.1.2-2 */
+    zz9k_fixed_on = ZZ9K_FIXED_ON;
+    reprobe(0);
     EQ(zz9k_probe(0), 1, "68030 list (0x144b/2 + /3) with fixed=1: the fixed base is probed");
     CHECK(bp->bt && bp->bt->autocon_pc == 0 && bp->phys == (long)ZZ9K_Z3660_BASE,
         "attached by the fixed row at 0x10000000");
     CHECK(strstr(klog, "Z3660 RTG (fixed base) at 0x10000000") != 0 &&
         strstr(klog, "not probed") == 0, "the attach line, no refusal");
+    /* the off value */
+    zz9k_fixed_on = ZZ9K_FIXED_OFF;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "fixed=-1, 68030 list: no board");
+    EQ(kbprobe_calls, 0, "fixed=-1: the fixed base is not read");
+    CHECK(strstr(klog, "fixed base") == 0, "fixed=-1: and not named");
     kboards[1].pc = 0;          /* the Zorro II board alone (Z3 RAM AutoConfig off) */
     kboards[0].pc = ZZ9K_Z3660_Z2_PC;
     kboards[0].base = 0x00e90000L;
     kboards[0].size = 0x00010000L;
-    bp->base = 0;
-    zz9k_noboard[0] = 0;
+    zz9k_fixed_on = ZZ9K_FIXED_ON;
+    reprobe(0);
     EQ(zz9k_probe(0), 1, "68030 list, 0x144b/3 alone, fixed=1: probed");
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+    reprobe(0);
+    EQ(zz9k_probe(0), 1, "68030 list, 0x144b/3 alone, auto: probed");
     kboards[0].pc = ZZ9K_Z3660_RAM_PC;  /* the RAM alone (SCSI AutoConfig off) */
     kboards[0].base = 0x40000000L;
     kboards[0].size = 0x10000000L;
-    bp->base = 0;
-    zz9k_noboard[0] = 0;
+    zz9k_fixed_on = ZZ9K_FIXED_ON;
+    reprobe(0);
     EQ(zz9k_probe(0), 1, "68030 list, 0x144b/2 alone, fixed=1: probed");
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+    reprobe(0);
+    EQ(zz9k_probe(0), 1, "68030 list, 0x144b/2 alone, auto: probed");
     kboards[0].pc = 0x144b0004UL;       /* not an identity the firmware emits */
-    bp->base = 0;
-    zz9k_noboard[0] = 0;
-    klogn = 0;
-    klog[0] = 0;
+    zz9k_fixed_on = ZZ9K_FIXED_ON;
+    reprobe(0);
     EQ(zz9k_probe(0), 0, "0x144b/4 alone, fixed=1: not probed");
     CHECK(strstr(klog, "not probed: no Z3660 in the AutoConfig list") != 0, "and it says so");
-    /* amiberry's Z3660: the accelerator's entry listed but not the RTG, the RTG at the fixed base */
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "0x144b/4 alone, auto: no board");
+    EQ(kbprobe_calls, 0, "0x144b/4 alone, auto: not read");
+    CHECK(strstr(klog, "fixed base") == 0, "0x144b/4 alone, auto: and not named");
+
+    /* the RTG listed as 0x144b/1 inside the identity map: by its AutoConfig row, once */
+    kboards[0].pc = ZZ9K_Z3660_PRODUCT_PC;
+    kboards[0].base = (long)WIN;
+    kboards[0].size = (long)WINSZ;
+    reprobe(0);
+    EQ(zz9k_probe(0), 1, "auto, 0x144b/1 listed: attached");
+    CHECK(bp->bt && bp->bt->autocon_pc == ZZ9K_Z3660_PRODUCT_PC && bp->phys == (long)WIN,
+        "by the AutoConfig row");
+    EQ(kbprobe_calls, 0, "the fixed base is not probed again");
+    EQ(klines("zz9000: Z3660 RTG at 0x10000000"), 1, "one attach line");
+    EQ(klines("fixed base"), 0, "the fixed row not named");
+#ifndef ZZ9K_HOST_BOTH
+    EQ(zz9k_boards[1].base, 0, "unit 1 stays empty: no double attach");
+#endif
+
+    /*
+     * Amiberry's Z3660: its SCSI board listed as 0x144b/1 but not the RTG, the RTG at the
+     * fixed base with no entry.  The listed entry does not answer as the RTG, so auto goes
+     * on to the fixed base, as with fixed=1.
+     */
     kboards[0].pc = ZZ9K_Z3660_PRODUCT_PC;
     kboards[0].base = (long)(WIN + 0x4000000UL);
     kboards[0].size = 0x01000000L;
-    zz9k_noboard[0] = 0;
-    klogn = 0;
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+    reprobe(0);
+    EQ(zz9k_probe(0), 1, "auto, 0x144b/1 not an RTG, RTG at the fixed base: attached");
+    CHECK(bp->bt && bp->bt->autocon_pc == 0 && bp->phys == (long)ZZ9K_Z3660_BASE,
+        "auto: by the fixed row");
+    CHECK(strstr(klog, "did not look like ZZ9000 regs") != 0, "after the listed entry did not answer");
+    EQ(klines("zz9000: Z3660 RTG (fixed base) at 0x10000000 size"), 1, "attached once");
+#ifndef ZZ9K_HOST_BOTH
+    EQ(zz9k_boards[1].base, 0, "and unit 1 stays empty");
+#endif
+    zz9k_fixed_on = ZZ9K_FIXED_ON;
+    reprobe(0);
     EQ(zz9k_probe(0), 1, "the fixed row when asked, on a machine that lists the board");
     CHECK(bp->bt && bp->bt->autocon_pc == 0, "attached by the fixed row");
     CHECK(strstr(klog, "did not look like ZZ9000 regs") != 0, "after the listed entry did not answer");
+    zz9k_fixed_on = ZZ9K_FIXED_OFF;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "fixed=-1, 0x144b/1 not an RTG: no board");
+    EQ(kbprobe_calls, 0, "fixed=-1: the fixed base is not read");
+    zz9k_fixed_on = ZZ9K_FIXED_ON;
     *(volatile unsigned short *)0xdff004UL = 0x0000;     /* OCS Agnus */
-    bp->base = 0;
+    reprobe(0);
     EQ(zz9k_probe(0), 0, "and only on an AGA machine");
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+    reprobe(0);
+    EQ(zz9k_probe(0), 0, "auto too");
+    EQ(kbprobe_calls, 0, "OCS: not read");
     *(volatile unsigned short *)0xdff004UL = 0x2300;
+#ifdef ZZ9K_HOST_BOTH
+    /*
+     * A ZZ9000 Zorro II card beside the Z3660 in its emulated 68030 mode (0x144b/2 + /3,
+     * the RTG at the fixed base): the Z3660 on unit 0, the ZZ9000 on unit 1, as when the
+     * Z3660's RTG is listed.
+     */
+    kboards[0].pc = ZZ9K_Z3660_RAM_PC;
+    kboards[0].base = 0x40000000L;
+    kboards[0].size = 0x10000000L;
+    kboards[1].pc = ZZ9K_Z3660_Z2_PC;
+    kboards[1].base = 0x00e90000L;
+    kboards[1].size = 0x00010000L;
+    reprobe(1);
+    EQ(zz9k_probe(0), 1, "two boards, 68030 list, auto: unit 0");
+    CHECK(bp->bt && bp->bt->autocon_pc == 0 && bp->phys == (long)ZZ9K_Z3660_BASE,
+        "unit 0: the Z3660 at its fixed base");
+    CHECK(zz9k_boards[1].base && zz9k_boards[1].bt->autocon_pc == ZZ9K_PRODUCT_PC_Z2 &&
+        zz9k_boards[1].phys == (long)WIN2, "unit 1: the ZZ9000");
+    kboards[1].pc = 0;
+    kboards[0].pc = ZZ9K_Z3660_PRODUCT_PC;      /* the same with the RTG listed */
+    kboards[0].base = (long)WIN;
+    kboards[0].size = (long)WINSZ;
+    reprobe(1);
+    EQ(zz9k_probe(0), 1, "two boards, the RTG listed: unit 0");
+    CHECK(bp->bt && bp->bt->autocon_pc == ZZ9K_Z3660_PRODUCT_PC, "unit 0: the Z3660 by its entry");
+    CHECK(zz9k_boards[1].base && zz9k_boards[1].bt->autocon_pc == ZZ9K_PRODUCT_PC_Z2 &&
+        zz9k_boards[1].phys == (long)WIN2, "unit 1: the ZZ9000, the same");
+#endif
 #elif defined(ZZ9K_TARGET_Z3660)
     /* a ZZ9000-only machine (0x6d6e, no 0x144b) with fixed=1: the card at 0x10000000 here */
     struct zz9k_board *bp = &zz9k_boards[0];
@@ -1295,7 +1458,17 @@ t_fixed()
         "AutoConfig list (0x144b product 1, 2 or 3)") != 0 &&
         strstr(klog, "no Z3660 RTG (fixed base)") == 0,
         "the fixed base is not read, and it says what it looked for");
-    zz9k_fixed_on = 0;
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+    reprobe(0);
+    EQ(zz9k_probe(0), 1, "ZZ9000-only list, auto: the card attaches");
+    CHECK(bp->bt && bp->bt->autocon_pc == pc, "auto: by its own AutoConfig row");
+    EQ(kbprobe_calls, 0, "auto: the fixed base is not read");
+    CHECK(strstr(klog, "fixed base") == 0, "auto: and not named on the console");
+    zz9k_fixed_on = ZZ9K_FIXED_OFF;
+    reprobe(0);
+    EQ(zz9k_probe(0), 1, "ZZ9000-only list, fixed=-1: the card attaches");
+    EQ(kbprobe_calls, 0, "fixed=-1: the fixed base is not read");
+    zz9k_fixed_on = ZZ9K_FIXED_AUTO;
 #endif
 }
 
@@ -1684,7 +1857,19 @@ t_params()
     EQ(zz9k_fixed_on, 1, "fixed=1");
     strcpy(buf, "fixed=on");
     zz9k_params(buf);
-    EQ(zz9k_fixed_on, 1, "a bad bool keeps fixed");
+    EQ(zz9k_fixed_on, 1, "a bad value keeps fixed");
+    strcpy(buf, "fixed=-1");
+    zz9k_params(buf);
+    EQ(zz9k_fixed_on, ZZ9K_FIXED_OFF, "fixed=-1: off");
+    strcpy(buf, "fixed=2");
+    zz9k_params(buf);
+    EQ(zz9k_fixed_on, ZZ9K_FIXED_OFF, "fixed=2 is out of range: kept");
+    strcpy(buf, "fixed=-2");
+    zz9k_params(buf);
+    EQ(zz9k_fixed_on, ZZ9K_FIXED_OFF, "fixed=-2 is out of range: kept");
+    strcpy(buf, "fixed=0");
+    zz9k_params(buf);
+    EQ(zz9k_fixed_on, ZZ9K_FIXED_AUTO, "fixed=0: auto");
     zz9k_fixed_on = 0;
 }
 #endif

@@ -55,14 +55,16 @@ left unchanged.
   the magic nothing is registered and the module is the display alone. Its unload is refused
   (`EBUSY`) while zz9ksvc holds the board. GETREG and SETREG never reach the block.
 - **Module parameters** (`module/z3660rtg.keys`): `blit` (1: use the card's blitter),
-  `maxarea` (pixels per blitter band, default 8192), `fixed` (0: find the board only
-  through its AutoConfig entry, as a Z3660 with its real 68060 is found; 1 also tries the fixed base at
-  `0x10000000`, which a Z3660 running its emulated 68030 and amiberry's Z3660 RTG stand-in
-  need, on a machine whose AutoConfig list holds a Z3660 identity, 0x144B product 1, 2 or 3)
-  and `kvfb` (MiB of a framebuffer
+  `maxarea` (pixels per blitter band, default 8192), `fixed` (the Z3660 RTG's fixed base
+  `0x10000000`. 0, the default, is automatic: when the AutoConfig list holds a Z3660
+  identity, 0x144B product 1, 2 or 3, and no entry gave its RTG, the fixed base is read,
+  guarded by `bprobe`, and the RTG attached if it answers. That is how a Z3660 running its
+  emulated 68030, whose list has only products 2 and 3, gets its RTG with no setting.
+  With no Z3660 listed nothing is read and nothing printed. 1 does the same, and also says
+  when no Z3660 is listed. -1 never reads the fixed base) and `kvfb` (MiB of a framebuffer
   above 1 GB mapped for the kernel). The static driver's
   `zz9k_blit_on`, `zz9k_blit_maxarea` and `zz9k_fixed_on` are the same knobs; a
-  `-DZZ9K_BENCH_Z3660` build turns `zz9k_fixed_on` on.
+  `-DZZ9K_BENCH_Z3660` build sets `zz9k_fixed_on` to 1.
 - **Kernel.** A Z3660 runs a 68040/68060 kernel from Antti Sokero's
   [amix-040-060-port](https://github.com/asokero/amix-040-060-port). The kernels here were
   assembled with [amix-kerntools](https://github.com/jusii/amix-kerntools), which builds this

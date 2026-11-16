@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-16 — the Z3660 RTG found automatically on the emulated 68030; module 1.1.2-3 (2028576..3430aad)
+
+The module now finds the Z3660's RTG by itself when the Z3660 runs its emulated 68030, with no setting. The `fixed` parameter is now an int from -1 to 1. It keeps its name and registry key, so existing `param fixed=1` lines still work; a line spelled `fixed=yes`, `on` or `true` must be rewritten as `fixed=1`.
+- 0 (the default) is automatic. When the AutoConfig list holds a Z3660 identity (0x144B product 1, 2 or 3) and no entry gave its RTG, the module reads the fixed base 0x10000000 and attaches the RTG if it answers. A board that does not answer gets one console line. With no Z3660 listed nothing is read and nothing is printed.
+- 1 works as in 1.1.2-2.
+- -1 never reads the fixed base.
+
+A listed 0x144B product 1 that is not the RTG now lets the search go on to the fixed base. The fixed-base read is guarded by bprobe, so a real 68060 where nothing decodes that address takes a caught bus error instead of a kernel fault. New host tests cover each case.
+
 ## 2026-11-16 — fixed=1 on the Z3660's emulated 68030; module 1.1.2-2 (604c723..f9273a5)
 
 With `fixed=1` the fixed base 0x10000000 is now read when the AutoConfig list holds any of the Z3660 firmware's identities: manufacturer 0x144B with product 1 (the RTG), 2 (its Zorro III RAM) or 3 (its Zorro II board). When the Z3660 runs its emulated 68030 (UAE_030_MMU, AutoConfig RTG off), the list holds only products 2 and 3. 1.1.2-1 required product 1, so it did not attach the RTG there (seen on an A4000T, firmware 1.03 beta 21); 1.1.1-4 had attached it. A machine with no 0x144B entry, a ZZ9000-only one included, still never has the fixed base read. The console line now says what it looked for. New host tests cover the 68030 list, each product on its own, an unknown product 4, the empty list and a ZZ9000-only list.

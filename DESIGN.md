@@ -383,6 +383,35 @@ only them, with no product 1 (the A4000T, firmware 1.03 beta 21: `144b:02` at `0
 entry, a ZZ9000-only one among them, never has the fixed base read, and the console says what
 was looked for.
 
+**Automatic by default (2026-11-16, module 1.1.2-3).** `fixed` is an int, -1..1. 0 (the default)
+is automatic: the fixed row runs under the rule above whenever the AutoConfig rows left the
+Z3660's RTG unattached, so a Z3660 running its emulated 68030 gets its RTG with no setting; with
+no `0x144B` entry nothing is read and nothing printed. 1 is the same plus the "not probed" line;
+-1 never reads the fixed base. A listed product 1 that does not answer as the RTG (amiberry's
+Z3660 SCSI board) leaves the fixed row its turn. Before any unguarded access the fixed row reads
+one byte of FW_VERSION through `bprobe` (stock DDI, both lines): where nothing decodes the base
+a real 68060 takes Buster's Zorro III timeout (283–295 ms), which `bprobe` catches on k46; the
+emulated CPUs answer instead (the Z3660 emulator's `dmmy_bank` reads all ones,
+`uae_emulator.cpp` `dummy_read`), and `zz9k_present` refuses that.
+
+What the firmware lists, and what auto does (sources: `main.c` 1476-1487, 1536-1551, 1797-1799;
+`z3660.v` 280-285, 393-401; `cpu_emulator.cpp` `reset_autoconfig`, 320-349; the extended ROM
+`kick31_060.asm`):
+
+| Mode | Listed | RTG | Auto |
+|---|---|---|---|
+| emulated CPU, `autoconfig_rtg NO` | /2 (`autoconfig_ram`), /3 (`scsiboot`) | `0x10000000` | fixed row attaches |
+| emulated CPU, `autoconfig_rtg YES` | /1 above 1 GB, /2 | at /1 | /1 row (mapped); fixed base reads all ones if reached |
+| real 68060, `autoconfig_rtg NO`, extended ROM | /1 at `0x10000000` (the ROM's ConfigDev), /2, /3 | `0x10000000` | /1 row; fixed row skipped (same board) |
+| real 68060, `autoconfig_rtg NO`, no extended ROM | /2, /3 | `0x10000000` | fixed row attaches |
+| real 68060, `autoconfig_rtg YES` | /1 above 1 GB, /2 | at /1 | /1 row (mapped); if that fails, the fixed base bus-errors under `bprobe` |
+| any, all AutoConfig off, no ROM | nothing | `0x10000000` | nothing read (neither 0 nor 1 reads) |
+
+Product 3 is presented only with `autoconfig_rtg NO` (`main.c` 1479, 1799), so a listed /3 always
+means the RTG is hard-mapped. Product 1 is always the RTG on real firmware: the FPGA's RTG
+sub-board, the emulator's RTG entry, the extended ROM's ConfigDev and the AmigaOS drivers' own
+fallback ConfigDev (`z3660-drivers/rtg/gfx.c` 447-478) all describe the RTG window.
+
 ### 4.3 What stays identical
 
 `/dev/zz9000` c 49 0, every ioctl number and struct, `Xzz9000`, `zz9k_test`'s command set,
