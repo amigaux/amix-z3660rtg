@@ -496,19 +496,27 @@ int zz9k_blit_on = 1;
 long zz9k_blit_maxarea = ZZ9K_BLIT_MAXAREA_DEFAULT;
 
 /*
- * Kernel-patchable (the module's `fixed` parameter): zz9k_fixed_on 1 lets the probe try the
- * fixed-base rows, whose board has no AutoConfig entry of its own.  Off by default: such a
- * probe reads a fixed address, and where nothing answers there it costs a bus timeout or hits
- * another card's memory.  Even when set, the fixed base is read only on a machine whose
- * AutoConfig list holds a Z3660 (zz9k_board_listed).  A real Z3660 with the 68060 is found
- * through its AutoConfig entry; with its emulated 68030 the RTG has none and needs this.
- * The bench build (-DZZ9K_BENCH_Z3660) turns it on for amiberry's Z3660
- * stand-in.
+ * Kernel-patchable (the module's `fixed` parameter): how the probe treats the fixed-base
+ * rows, whose board has no AutoConfig entry of its own (the Z3660's RTG with AutoConfig RTG
+ * off: its emulated 68030 lists only its RAM and its Zorro II board).
+ *   0 (ZZ9K_FIXED_AUTO, the default): the fixed base is read when the AutoConfig list holds
+ *     a Z3660 (zz9k_board_listed) and its RTG was not attached through an entry; with no
+ *     Z3660 listed nothing is read and nothing is said.
+ *   1 (ZZ9K_FIXED_ON): the same, and a machine without a Z3660 is told the base was not
+ *     probed.
+ *  -1 (ZZ9K_FIXED_OFF): the fixed base is never read.
+ * The read is guarded by bprobe (zz9k_buserr): where nothing decodes the base, a real
+ * 68060 takes Buster's Zorro III timeout as a bus error, which bprobe catches; the
+ * emulated CPUs return data there, which the identity check refuses (zz9k_present).
+ * The bench build (-DZZ9K_BENCH_Z3660) turns it on for amiberry's Z3660 stand-in.
  */
+#define ZZ9K_FIXED_OFF   (-1)
+#define ZZ9K_FIXED_AUTO  0
+#define ZZ9K_FIXED_ON    1
 #ifdef ZZ9K_BENCH_Z3660
-int zz9k_fixed_on = 1;
+int zz9k_fixed_on = ZZ9K_FIXED_ON;
 #else
-int zz9k_fixed_on = 0;
+int zz9k_fixed_on = ZZ9K_FIXED_AUTO;
 #endif
 
 /*
@@ -1058,6 +1066,27 @@ struct zz9k_boardtab *bt;
 #endif
 }
 
+/*
+ * A bus error at the fixed base: one byte of the row's FW_VERSION register read through
+ * bprobe (stock, both lines' DDI), before any unguarded access.  It catches Buster's
+ * timeout on a real 68060 when nothing decodes the base (an RTG AutoConfig'd elsewhere);
+ * the emulated CPUs answer instead, and the identity check that follows refuses them.
+ */
+extern int bprobe();
+
+static int
+zz9k_buserr(bt, base)
+struct zz9k_boardtab *bt;
+long base;
+{
+    unsigned short off;
+
+    off = bt->regoff[ZZ9K_R_FW_VERSION];
+    if (off == ZZ9K_NOREG)
+        off = 0;
+    return bprobe((char *)(base + off), -1) != 0;
+}
+
 /* The lowest unit without a board, or 0. */
 static struct zz9k_board *
 zz9k_free_unit()
@@ -1106,7 +1135,9 @@ long base, size;
  * One walk of the board table, in unit order, attaching every board not held yet into the
  * free units: each AutoConfig entry of a row's identity (two cards of one kind each get a
  * unit), then the fixed-base rows.  A board already held -- the Z3660 listed in AutoConfig
- * and reached at its fixed base too -- is not probed again.
+ * and reached at its fixed base too -- is not probed again.  A listed 0x144b/1 that does
+ * not answer as the RTG (amiberry's Z3660 SCSI board) leaves the fixed row its turn, as
+ * when only the Z3660's RAM or Zorro II board is listed.
  */
 static void
 zz9k_scan()
@@ -1120,19 +1151,25 @@ zz9k_scan()
         if ((bt->flags & ZZ9K_BT_UNIQUE) && zz9k_unique_held(bt))
             continue;
         if (!bt->autocon_pc) {
-            if (!zz9k_fixed_on || !zz9k_free_unit())
+            if (zz9k_fixed_on == ZZ9K_FIXED_OFF || !zz9k_free_unit())
                 continue;
             if ((bt->flags & ZZ9K_BT_AGAGATE) && !zz9k_aga())
                 continue;
             base = (long)bt->fixed_base;
             size = (long)bt->fixed_size;
             if (!zz9k_board_listed(bt)) {
-                printf("zz9000: %s at 0x%x not probed: %s\n",
-                    bt->name, (unsigned int)base, ZZ9K_LISTED_WANT);
+                if (zz9k_fixed_on == ZZ9K_FIXED_ON)
+                    printf("zz9000: %s at 0x%x not probed: %s\n",
+                        bt->name, (unsigned int)base, ZZ9K_LISTED_WANT);
                 continue;
             }
-            if (!zz9k_held(base))
-                (void)zz9k_try(bt, base, size);
+            if (zz9k_held(base))
+                continue;
+            if (zz9k_buserr(bt, base)) {
+                printf("zz9000: no %s at 0x%x: bus error\n", bt->name, (unsigned int)base);
+                continue;
+            }
+            (void)zz9k_try(bt, base, size);
             continue;
         }
         for (inst = 0; inst < ZZ9K_MAX_AUTOCON && zz9k_free_unit(); ++inst) {
@@ -3334,7 +3371,7 @@ MOD_DRV_WRAPPER(zz9000, zz9000_load, zz9000_unload, zz9000_halt,
 
 /*
  * The module's parameters replace the static kernel's patchable knobs (z3660rtg.keys):
- * blit (zz9k_blit_on), fixed (zz9k_fixed_on), maxarea (zz9k_blit_maxarea, pixels;
+ * blit (zz9k_blit_on), fixed (zz9k_fixed_on: -1 off, 0 auto, 1 on), maxarea (zz9k_blit_maxarea, pixels;
  * 0 = the default, 8192) and kvfb (zz9k_kvfb: MiB of the framebuffer mapped for the
  * kernel when the board lies above the identity map).
  * Above the largest mode's area (2560x1440) a cap never splits, so that is maxarea's limit.
@@ -3409,10 +3446,12 @@ char *params;
             else
                 printf("zz9000: param blit: bad value, kept %d\n", zz9k_blit_on);
         } else if (zz9k_word(name, nlen, "fixed")) {
-            if (zz9k_word(val, vlen, "1"))
-                zz9k_fixed_on = 1;
+            if (zz9k_word(val, vlen, "1"))      /* int -1..1: off, auto, on */
+                zz9k_fixed_on = ZZ9K_FIXED_ON;
             else if (zz9k_word(val, vlen, "0"))
-                zz9k_fixed_on = 0;
+                zz9k_fixed_on = ZZ9K_FIXED_AUTO;
+            else if (zz9k_word(val, vlen, "-1"))
+                zz9k_fixed_on = ZZ9K_FIXED_OFF;
             else
                 printf("zz9000: param fixed: bad value, kept %d\n", zz9k_fixed_on);
 #ifdef ZZ9K_CAN_MAP

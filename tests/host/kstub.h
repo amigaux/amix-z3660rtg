@@ -201,6 +201,26 @@ long *basep, *sizep;
     return 0;
 }
 
+/*
+ * bprobe: counts its calls (a call = the fixed base about to be read) and reports a bus
+ * error for an address in [kbuserr_lo, kbuserr_hi), as a real 68060 does where nothing
+ * decodes; it reads nothing.
+ */
+static int kbprobe_calls;
+static unsigned long kbprobe_last, kbuserr_lo, kbuserr_hi;
+
+static int
+bprobe(addr, v)
+char *addr;
+int v;
+{
+    unsigned long a = (unsigned long)addr;
+
+    ++kbprobe_calls;
+    kbprobe_last = a;
+    return v < 0 && a >= kbuserr_lo && a < kbuserr_hi;
+}
+
 /* printf: kept in a buffer, shown with -v */
 static char klog[65536];
 static int klogn, kverbose;
